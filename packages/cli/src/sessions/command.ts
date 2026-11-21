@@ -1,14 +1,15 @@
 // The `oars sessions` command group's bodies: each returns the `--json` document and the text a human sees.
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { denialOf, parseAllowList, runAllow } from './allow.js';
 import { SOURCES, sourceLabel, type Source } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
-import { loadTerms } from './exclusion.js';
+import { exclusionPaths, loadTerms } from './exclusion.js';
+import { AGENTS, BOTH_NOTICE, chooseFile, CLAUDE, gitTop, keepLines, planWrite } from './context-write.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
 import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
-import { localNames, makeRedactor } from './redact.js';
+import { localNames, makeRedactor, redactTranscript } from './redact.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
 import type { Emit } from '../telemetry/emit.js';
@@ -211,6 +212,63 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
   const block = step.found;
   const text = block ?? (step.noProjects && (await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
   return { document: { ok: true, context: block ?? null }, text };
+};
+
+/** A file's text, or undefined when it does not exist; any other failure (a folder, no permission) stops the write before it starts. */
+const readIfThere = async (path: string): Promise<string | undefined> => {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw new CliError(`Cannot read ${path}: ${error instanceof Error ? error.message : 'unreadable'}.`, ExitCode.INVALID, 'unreadable');
+  }
+};
+
+/**
+ * `recall --context --write [file]`: the `--context` block, kept between two marker lines in an instruction file. With no file named the target sits at the git top level of
+ * `--cwd` (see `chooseFile`); a named file is taken from `--cwd`. Each line passes the redaction `--receipt` applies and the exclusion terms file, and one that trips either is dropped
+ * whole. A run whose lines are already on disk writes nothing. Git is never run: the file is the user's to commit.
+ */
+export const sessionsContextWrite = async (deps: SessionsDeps, options: ContextOptions, write: { file: string | undefined; dryRun: boolean }, env: NodeJS.ProcessEnv): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const cwd = resolve(options.cwd);
+  const notices: string[] = [];
+  let path: string;
+  let existing: string | undefined;
+  if (write.file === undefined) {
+    const top = gitTop(cwd);
+    if (top === null) throw new CliError(`${cwd} is not inside a git repository, so there is no top level to write to. Nothing was written. Name a file: --write <file>.`, ExitCode.INVALID, 'invalid');
+    const present: { [name: string]: string | undefined } = { [AGENTS]: await readIfThere(join(top, AGENTS)), [CLAUDE]: await readIfThere(join(top, CLAUDE)) };
+    const choice = chooseFile(present);
+    if ('refusal' in choice) throw new CliError(choice.refusal, ExitCode.INVALID, 'invalid');
+    path = join(top, choice.file);
+    existing = present[choice.file];
+    if (choice.both && choice.file === AGENTS) notices.push(BOTH_NOTICE);
+  } else {
+    path = resolve(cwd, write.file);
+    existing = await readIfThere(path);
+    if (basename(path) === AGENTS && (await readIfThere(join(dirname(path), CLAUDE))) !== undefined) notices.push(BOTH_NOTICE);
+  }
+  const base = await sessionsContext(deps, options);
+  const context: unknown = Reflect.get(base.document, 'context');
+  if (typeof context !== 'string') return { document: { ok: true, context: null, write: null }, text: [...notices, base.text, 'Nothing was written.'].join('\n') };
+  const [header = '', ...entries] = context.split('\n');
+  const terms = await loadTerms(exclusionPaths(runtime.projectsRoot, env).terms);
+  const domains = await readRedactDomains(runtime.storeDir);
+  const names = localNames();
+  const { kept, dropped } = keepLines(entries, (line) => redactTranscript(line, domains, names).text !== line, terms);
+  const droppedLine = `Lines dropped for a name, a secret, an excluded term, or a link: ${String(dropped)}.`;
+  if (kept.length === 0) return { document: { ok: true, context, write: null }, text: [...notices, 'Every line of the block was dropped, so nothing was written.', droppedLine].join('\n') };
+  const plan = planWrite(existing, [header, ...kept], new Date(deps.now()).toISOString().slice(0, 10));
+  if (plan.refusal !== undefined) throw new CliError(`${path} ${plan.refusal}`, ExitCode.INVALID, 'invalid');
+  const block = plan.block.join('\n');
+  const document = { ok: true, context, write: { path, created: plan.created, unchanged: plan.unchanged, dryRun: write.dryRun, dropped, lines: kept.length, block } };
+  if (write.dryRun) return { document, text: [...notices, `Dry run: nothing was written. ${plan.unchanged ? 'These lines are already in' : plan.created ? 'Would create' : 'Would update'} ${path}:`, block, droppedLine].join('\n') };
+  if (plan.unchanged || plan.content === undefined) return { document, text: [...notices, `${path} already holds these lines: nothing was written.`, droppedLine].join('\n') };
+  await writeFile(path, plan.content);
+  // Whether it made the file and how many lines it holds, and nothing of the lines or where they went.
+  deps.telemetry?.('recall-write', { created: plan.created ? 1 : 0, lines: kept.length });
+  return { document, text: [...notices, `Wrote ${path}:`, block, droppedLine, 'The file is yours to commit; oars does not run git.'].join('\n') };
 };
 
 export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {

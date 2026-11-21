@@ -11,7 +11,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsReceipt, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsContextWrite, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsReceipt, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { sessionsCard } from './sessions/card-command.js';
 import type { CardPeriod } from './sessions/card.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
@@ -403,8 +403,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--harness <version>', 'with --context: only errors seen under this Claude Code version')
     .option('--top <n>', 'with --context: how many signatures (default 5)', positiveInteger)
     .option('--max-chars <n>', "with --context: the block's length limit (default 1200)", positiveInteger)
+    .option('--write [file]', "with --context: keep the block between two marker lines in an instruction file, so an agent that reads the file sees it with oars not installed. With no file: the git top level's AGENTS.md or CLAUDE.md (the one that holds the markers, else CLAUDE.md when only it exists, else AGENTS.md). A line with a name, a secret, an excluded term, or a link is dropped whole. The file is yours to commit; oars never runs git")
+    .option('--dry-run', 'with --write: print the block and the file it would go to, and write nothing')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      const written = options['write'] !== undefined;
+      if (!flag(options, 'context') && (written || flag(options, 'dryRun'))) throw new CliError(`${written ? '--write' : '--dry-run'} goes with --context: oars sessions recall --context --write [file].`, ExitCode.USAGE, 'usage');
+      if (flag(options, 'dryRun') && !written) throw new CliError('--dry-run goes with --write: oars sessions recall --context --write --dry-run.', ExitCode.USAGE, 'usage');
       if (flag(options, 'receipt')) {
         if (flag(options, 'counts') || flag(options, 'mcp') || flag(options, 'context') || list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
         emit(deps, flag(options, 'json'), await sessionsReceipt(sessionDeps(deps), { ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }), ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }), ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }), ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }) }, text(options, 'session') ?? null));
@@ -415,16 +420,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
         return;
       }
       if (flag(options, 'context')) {
-        emit(
-          deps,
-          flag(options, 'json'),
-          await sessionsContext(sessionDeps(deps), {
-            cwd: text(options, 'cwd') ?? process.cwd(),
-            ...(text(options, 'harness') === undefined ? {} : { harness: text(options, 'harness') }),
-            top: count(options, 'top') ?? 5,
-            maxChars: count(options, 'maxChars') ?? 1200,
-          }),
-        );
+        const context = {
+          cwd: text(options, 'cwd') ?? process.cwd(),
+          ...(text(options, 'harness') === undefined ? {} : { harness: text(options, 'harness') }),
+          top: count(options, 'top') ?? 5,
+          maxChars: count(options, 'maxChars') ?? 1200,
+        };
+        emit(deps, flag(options, 'json'), written ? await sessionsContextWrite(sessionDeps(deps), context, { file: text(options, 'write'), dryRun: flag(options, 'dryRun') }, deps.env) : await sessionsContext(sessionDeps(deps), context));
         return;
       }
       if (flag(options, 'mcp')) {
