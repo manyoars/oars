@@ -95,15 +95,16 @@ const scene = (env: NodeJS.ProcessEnv = {}, stdin: string[] = []): Scene => {
   return { h, out: join(h.configDir, 'packs'), storeDir, calls: [] };
 };
 
-const platform = (s: Scene) =>
+const platform = (s: Scene): void => {
   server.use(
     http.get(`${API}/billing/datasets/${LISTING}`, () => {
       s.calls.push('listing');
       return HttpResponse.json(listing);
     }),
   );
+};
 
-const startAnswer = (s: Scene, answers: Array<() => Response>) =>
+const startAnswer = (s: Scene, answers: Array<() => Response>): void => {
   server.use(
     http.post(`${POOL}/v1/packs/${PRICE_REF}/fetches`, async ({ request }) => {
       s.calls.push(`start ${request.headers.get('authorization') ?? ''} ${JSON.stringify(await request.json())}`.replace(/"buyerKey":"[0-9a-f]+"/, '"buyerKey":"<key>"'));
@@ -111,8 +112,9 @@ const startAnswer = (s: Scene, answers: Array<() => Response>) =>
       return answer?.() ?? new Response(null, { status: 500 });
     }),
   );
+};
 
-const downloadAnswer = (s: Scene, answers: Array<() => Response>) =>
+const downloadAnswer = (s: Scene, answers: Array<() => Response>): void => {
   server.use(
     http.get(`${POOL}/v1/packs/fetches/${FETCH_ID}`, () => {
       s.calls.push('download');
@@ -120,6 +122,7 @@ const downloadAnswer = (s: Scene, answers: Array<() => Response>) =>
       return answer?.() ?? new Response(null, { status: 500 });
     }),
   );
+};
 
 const queued = () => HttpResponse.json({ fetchId: FETCH_ID, state: 'queued', priceRef: PRICE_REF }, { status: 202 });
 const pending = () => HttpResponse.json({ state: 'pending' }, { status: 202 });
@@ -240,7 +243,7 @@ describe('oars data fetch', () => {
     const keys: string[] = [];
     server.use(
       http.post(`${POOL}/v1/packs/${PRICE_REF}/fetches`, async ({ request }) => {
-        keys.push(String(Reflect.get((await request.json()) as object, 'buyerKey')));
+        keys.push(String(Reflect.get(Object(await request.json()), 'buyerKey')));
         return queued();
       }),
     );
@@ -534,7 +537,7 @@ describe('oars data fetch', () => {
 
     expect(await run(['data', 'fetch', LISTING, '--state', 'CA', '--json'], s.h.deps)).toBe(ExitCode.OK);
 
-    const folder = String(Reflect.get(JSON.parse(s.h.out.join('')) as object, 'folder'));
+    const folder = String(Reflect.get(Object(JSON.parse(s.h.out.join(''))), 'folder'));
     expect(folder).toContain('oars-pack-');
     expect(existsSync(join(folder, 'manifest.jsonl'))).toBe(true);
   });

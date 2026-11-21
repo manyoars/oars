@@ -92,7 +92,7 @@ export const checkPack = async (folder: string): Promise<string[]> => {
     const kept = await stat(join(folder, 'sessions', id)).then((entry) => entry.isDirectory(), () => false);
     if (!kept) problems.push(`${where}: no folder sessions/${id}`);
   }
-  const folders = await readdir(join(folder, 'sessions')).catch(() => [] as string[]);
+  const folders = await readdir(join(folder, 'sessions')).catch((): string[] => []);
   for (const name of folders) if (!ids.has(name)) problems.push(`sessions/${name}: no manifest row names it`);
   return problems;
 };
