@@ -84,9 +84,7 @@ describe('sessionsVerify, one yielding and one moved-shape file per harness', ()
     ] as const) {
       const logs = join(antigravity, 'brain', id, '.system_generated', 'logs');
       mkdirSync(logs, { recursive: true });
-      writeFileSync(join(logs, 'transcript_full.jsonl'), `${records.map((record) => JSON.stringify(record)).join('
-')}
-`);
+      writeFileSync(join(logs, 'transcript_full.jsonl'), `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
     }
     const grok = stageGrok(root, [
       {
