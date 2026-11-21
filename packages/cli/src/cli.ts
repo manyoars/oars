@@ -4,6 +4,7 @@ import { resolveApiUrl } from './api.js';
 import { keysCreate, keysList, keysRevoke, SCOPED_AUTHORITIES } from './commands/keys.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
+import { dataFetch, dataSearch } from './commands/data.js';
 import { purchasingBuy, purchasingGet, purchasingOffer } from './commands/purchasing.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
@@ -92,6 +93,12 @@ const count = (options: OptionValues, name: string): number | undefined => {
 
 /** A repeatable option's collector: each use adds one value. */
 const collect = (value: string, previous: string[] | undefined): string[] => [...(previous ?? []), value];
+
+const decimal = (value: string): number => {
+  const parsed = Number(value);
+  if (value.trim() === '' || !(parsed >= 0)) throw new InvalidArgumentError('it must be a number of US dollars, zero or more.');
+  return parsed;
+};
 
 const positiveInteger = (value: string): number => {
   if (!/^[1-9]\d*$/.test(value)) throw new InvalidArgumentError('it must be a positive whole number.');
@@ -298,6 +305,39 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (purchaseId: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await purchasingGet(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), purchaseId, ...sdkKeyFile(options) }));
+    });
+
+  const data = program.command('data').description('find a dataset pack in the public catalog and fetch it (buying a credit first, only when you say yes)');
+
+  data
+    .command('search')
+    .description('list the public catalog: listing id, seller, price, fetches, price per fetch, sessions, and redaction version')
+    .argument('[query]', 'text in a listing name or summary')
+    .option('--harness <name>', 'a harness the pack covers, such as claude-code')
+    .option('--permitted-use <use>', 'a use the pack permits, such as evaluation')
+    .option('--training <terms>', 'not-offered, priced-add-on, or included')
+    .option('--max-price-per-fetch <usd>', 'the most a fetch may cost, in USD', decimal)
+    .action(async (query: string | undefined, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await dataSearch(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), query, harness: text(options, 'harness'), permittedUse: text(options, 'permittedUse'), training: text(options, 'training'), maxPricePerFetchUsd: count(options, 'maxPricePerFetch') }));
+    });
+
+  data
+    .command('fetch')
+    .description("start a fetch of a listing's pack, buy a credit if the pool asks (only after --yes or a typed yes, never over --max-usd), wait for the pack, unpack it into a fresh folder, and check it")
+    .argument('<listingId>', 'the listing id oars data search prints')
+    .requiredOption('--state <XX>', 'your two-letter US state: the pool sells to US buyers only')
+    .option('--out <dir>', 'the folder to make the pack folder in (default: a fresh temporary folder)')
+    .option('--yes', 'buy the credit without asking')
+    .option('--max-usd <usd>', 'refuse to buy a pack that costs more than this (default: OARS_BUY_CAP_USD; the platform also enforces the agent cap)', decimal)
+    .option('--sdk-key-file <path>', "a file holding the buying agent's SDK key (default: OARS_SDK_KEY)")
+    .option('--server <url>', 'the pool server (default: OARS_POOL_URL, else https://pool.manyoars.com)')
+    .action(async (listingId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const capText = deps.env.OARS_BUY_CAP_USD;
+      const envCap = capText === undefined || capText === '' ? undefined : Number(capText);
+      if (envCap !== undefined && !(envCap >= 0)) throw new CliError('OARS_BUY_CAP_USD must be a number of US dollars.', ExitCode.USAGE, 'data-fetch');
+      emit(deps, flag(options, 'json'), await dataFetch(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), listingId, state: text(options, 'state') ?? '', out: text(options, 'out'), yes: flag(options, 'yes'), maxUsd: count(options, 'maxUsd') ?? envCap, sdkKeyFile: text(options, 'sdkKeyFile'), server: text(options, 'server') }));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
