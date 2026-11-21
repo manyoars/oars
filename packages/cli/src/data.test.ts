@@ -635,7 +635,7 @@ describe('oars data fetch refuses an unsafe archive and writes nothing', () => {
     platform(s);
     startAnswer(s, [queued]);
     const header = block({ name: 'sessions/abc/main.jsonl' });
-    header.write(`${(4096).toString(8).padStart(11, '0')} `, 124);
+    header.write(`${(4096).toString(8).padStart(11, '0')}\0`, 124);
     downloadAnswer(s, [() => new HttpResponse(Buffer.concat([header, Buffer.alloc(1024, 120)]), { status: 200 })]);
 
     expect(await run(fetchArgs(s), s.h.deps)).toBe(ExitCode.INVALID);
