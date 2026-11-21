@@ -94,9 +94,12 @@ const count = (options: OptionValues, name: string): number | undefined => {
 /** A repeatable option's collector: each use adds one value. */
 const collect = (value: string, previous: string[] | undefined): string[] => [...(previous ?? []), value];
 
+/** A plain non-negative decimal: no sign, exponent, hex, or Infinity. */
+const DECIMAL = /^\d+(\.\d+)?$/;
+
 const decimal = (value: string): number => {
   const parsed = Number(value);
-  if (!/^\d+(\.\d+)?$/.test(value)) throw new InvalidArgumentError('it must be a number of US dollars, zero or more.');
+  if (!DECIMAL.test(value)) throw new InvalidArgumentError('it must be a number of US dollars, zero or more.');
   return parsed;
 };
 
@@ -336,7 +339,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       const options: OptionValues = command.optsWithGlobals();
       const capText = deps.env.OARS_BUY_CAP_USD;
       const envCap = capText === undefined || capText === '' ? undefined : Number(capText);
-      if (envCap !== undefined && !(envCap >= 0)) throw new CliError('OARS_BUY_CAP_USD must be a number of US dollars.', ExitCode.USAGE, 'data-fetch');
+      if (capText !== undefined && capText !== '' && !DECIMAL.test(capText)) throw new CliError('OARS_BUY_CAP_USD must be a number of US dollars.', ExitCode.USAGE, 'data-fetch');
       emit(deps, flag(options, 'json'), await dataFetch(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), listingId, state: text(options, 'state') ?? '', out: text(options, 'out'), yes: flag(options, 'yes'), maxUsd: count(options, 'maxUsd') ?? envCap, sdkKeyFile: text(options, 'sdkKeyFile'), server: text(options, 'server') }));
     });
 

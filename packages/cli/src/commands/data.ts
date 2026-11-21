@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -19,7 +19,6 @@ const STATE = /^[A-Za-z]{2}$/;
 const FETCH_ID = /^[A-Za-z0-9_-]{1,128}$/;
 /** After a buy settles the pool may still answer 402 for a moment: the start is tried this many times more. */
 const START_RETRIES = 4;
-const OPEN_PURCHASE = 'open-purchase.json';
 /** The wait between polls grows by half each time up to the longest, and the whole wait ends at its limit. */
 const FIRST_WAIT_MS = 1000;
 const LONGEST_WAIT_MS = 15_000;
@@ -136,16 +135,26 @@ interface OpenPurchase {
   priceRef: string;
 }
 
+/** One record per pack, so a purchase of pack A is never closed by a fetch of pack B. */
+const recordFile = (storeDir: string, priceRef: string): string => join(storeDir, `open-purchase-${createHash('sha256').update(priceRef).digest('hex')}.json`);
+
 const openPurchaseOf = async (storeDir: string, priceRef: string): Promise<OpenPurchase | undefined> => {
-  const raw = await readFile(join(storeDir, OPEN_PURCHASE), 'utf8').catch(() => undefined);
-  const parsed: unknown = raw === undefined ? undefined : JSON.parse(raw);
+  const file = recordFile(storeDir, priceRef);
+  const raw = await readFile(file, 'utf8').catch(() => undefined);
+  if (raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new CliError(`The record of an open purchase, ${file}, cannot be read. Remove that file and run again.`, ExitCode.UNEXPECTED, FETCH);
+  }
   if (!isObject(parsed)) return undefined;
   const purchaseId = textIn(parsed, 'purchaseId');
   const offerId = textIn(parsed, 'offerId');
   return purchaseId !== undefined && offerId !== undefined && textIn(parsed, 'priceRef') === priceRef ? { purchaseId, offerId, priceRef } : undefined;
 };
 
-const closePurchase = (storeDir: string): Promise<void> => rm(join(storeDir, OPEN_PURCHASE), { force: true });
+const closePurchase = (storeDir: string, priceRef: string): Promise<void> => rm(recordFile(storeDir, priceRef), { force: true });
 
 /**
  * Buys the offer's pack under the agent's SDK key and waits for the purchase to settle. Refuses over the cap, and never buys unconfirmed.
@@ -173,7 +182,7 @@ const buy = async (deps: RunDeps, options: DataFetchOptions, storeDir: string, l
     const made = unwrap(FETCH, await purchases.buy(client, { sdkKey, offerId: offer.offerId, priceRef: listing.priceRef }));
     purchase = { purchaseId: made.purchaseId, offerId: offer.offerId, priceRef: listing.priceRef };
     await mkdir(storeDir, { recursive: true });
-    await writeFile(join(storeDir, OPEN_PURCHASE), JSON.stringify(purchase), { mode: 0o600 });
+    await writeFile(recordFile(storeDir, listing.priceRef), JSON.stringify(purchase), { mode: 0o600 });
     return settle(client, sdkKey, storeDir, purchase, made, deps);
   }
   deps.io.stderr(`Purchase ${open.purchaseId} was already made: waiting for it, not buying again.
@@ -191,7 +200,7 @@ const settle = async (client: ReturnType<typeof apiClient>, sdkKey: string, stor
   }
   if (current.status === 'PENDING') throw new CliError(`Purchase ${purchase.purchaseId} is still pending: run the command again to continue; it will not buy again.`, ExitCode.UNREACHABLE, FETCH);
   if (current.status !== 'SUCCEEDED') {
-    await closePurchase(storeDir);
+    await closePurchase(storeDir, purchase.priceRef);
     throw new CliError(`Purchase ${purchase.purchaseId} ${current.status}${current.failureCode === undefined ? '' : ` (${current.failureCode})`}. Nothing more was bought.`, ExitCode.CONFLICT, FETCH);
   }
 };
@@ -232,10 +241,11 @@ export const dataFetch = async (deps: RunDeps, options: DataFetchOptions): Promi
       if (attempt < START_RETRIES) await deps.sleep(FIRST_WAIT_MS * 2 ** attempt);
     }
   }
-  if (started.status === 202) await closePurchase(storeDir);
+  if (started.status === 202) await closePurchase(storeDir, listing.priceRef);
   const fetchId = started.status === 202 && isObject(started.body) ? textIn(started.body, 'fetchId') : undefined;
   if (fetchId !== undefined && !FETCH_ID.test(fetchId)) throw new CliError('The pool named a fetch id this command will not use in a path. Nothing was written.', ExitCode.UNEXPECTED, FETCH);
-  if (fetchId === undefined) throw started.status === 402 ? new CliError('The pool still asks for payment after the purchase settled.', ExitCode.CONFLICT, FETCH) : refusal(FETCH, started);
+  const openId = started.status === 402 ? (await openPurchaseOf(storeDir, listing.priceRef))?.purchaseId : undefined;
+  if (fetchId === undefined) throw started.status === 402 ? new CliError(`The pool still asks for payment after the purchase settled. Purchase ${openId ?? 'unknown'} is recorded in ${recordFile(storeDir, listing.priceRef)}: remove that file to buy again.`, ExitCode.CONFLICT, FETCH) : refusal(FETCH, started);
   let archive: Uint8Array | undefined;
   for (const wait of waits(FETCH_LIMIT_MS)) {
     const polled = await ask(deps, FETCH, server, `/v1/packs/fetches/${encodeURIComponent(fetchId)}`, { token, show: credential, binary: true });

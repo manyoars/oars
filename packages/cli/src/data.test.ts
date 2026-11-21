@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { http, HttpResponse } from 'msw';
@@ -203,13 +204,6 @@ describe('oars data search', () => {
     expect(await run(['data', 'search'], h.deps)).toBe(ExitCode.UNREACHABLE);
   });
 
-  it('rejects a cap that is not a plain decimal, Infinity included', async () => {
-    const s = scene();
-
-    expect(await run(fetchArgs(s, '--max-usd', 'Infinity'), s.h.deps)).toBe(ExitCode.USAGE);
-    expect(await run(fetchArgs(s, '--max-usd', '1e3'), s.h.deps)).toBe(ExitCode.USAGE);
-  });
-
   it('rejects a negative --max-price-per-fetch', async () => {
     const h = harness();
 
@@ -218,6 +212,13 @@ describe('oars data search', () => {
 });
 
 describe('oars data fetch', () => {
+  it('rejects a cap that is not a plain decimal, Infinity included', async () => {
+    const s = scene();
+
+    expect(await run(fetchArgs(s, '--max-usd', 'Infinity'), s.h.deps)).toBe(ExitCode.USAGE);
+    expect(await run(fetchArgs(s, '--max-usd', '1e3'), s.h.deps)).toBe(ExitCode.USAGE);
+  });
+
   it('buys the offer on a 402 under the SDK key, polls the purchase, starts again, polls the fetch, and unpacks a valid pack', async () => {
     const s = scene();
     platform(s);
@@ -244,7 +245,7 @@ describe('oars data fetch', () => {
     expect(s.h.sleeps.length).toBeGreaterThanOrEqual(2);
     expect(errText(s)).toContain('The pool needs a credit');
     expect(errText(s)).toContain('held now: {"credits":0}');
-    expect(s.h.out.join('')).toContain('bought one credit first, $');
+    expect(s.h.out.join('')).toContain('bought one credit first, $10.00');
   });
 
   it('records the open purchase, so a rerun after a pending exit polls it and buys once', async () => {
@@ -259,7 +260,7 @@ describe('oars data fetch', () => {
     expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.OK);
 
     expect(s.calls.filter((call) => call.startsWith('buy '))).toHaveLength(1);
-    expect(existsSync(join(s.storeDir, 'open-purchase.json'))).toBe(false);
+    expect(readdirSync(s.storeDir).filter((name) => name.startsWith('open-purchase'))).toEqual([]);
   });
 
   it('asks again a few times while a settled purchase is still answered 402', async () => {
@@ -341,6 +342,76 @@ describe('oars data fetch', () => {
     expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.CONFLICT);
 
     expect(bought(s)).toBe(false);
+  });
+
+  it('puts the amount paid in the --json document', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [paymentRequired, queued]);
+    buyEndpoints(s);
+    downloadAnswer(s, [pack()]);
+
+    expect(await run(fetchArgs(s, '--yes', '--json'), s.h.deps)).toBe(ExitCode.OK);
+
+    expect(JSON.parse(s.h.out.join(''))).toMatchObject({ ok: true, purchased: true, amountUsd: '10.0000' });
+  });
+
+  it('keeps one open purchase per pack: A pending, B fetched, A again buys A once', async () => {
+    const s = scene();
+    platform(s);
+    const listingB = '1c7d2f1f-3e5a-4a0b-9b64-6a1e4c2e3daa';
+    server.use(
+      http.get(`${API}/billing/datasets/${listingB}`, () => HttpResponse.json({ ...listing, listingId: listingB, priceRef: 'pack-200' })),
+      http.post(`${POOL}/v1/packs/pack-200/fetches`, () => HttpResponse.json({ fetchId: 'f-2', state: 'queued', priceRef: 'pack-200' }, { status: 202 })),
+      http.get(`${POOL}/v1/packs/fetches/f-2`, () => pack()()),
+    );
+    startAnswer(s, [paymentRequired, paymentRequired, queued]);
+    buyEndpoints(s, ['PENDING']);
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.UNREACHABLE);
+    expect(await run(['data', 'fetch', listingB, '--state', 'CA', '--out', s.out], s.h.deps)).toBe(ExitCode.OK);
+    buyEndpoints(s, ['SUCCEEDED']);
+    downloadAnswer(s, [pack()]);
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.OK);
+
+    expect(s.calls.filter((call) => call.startsWith('buy '))).toHaveLength(1);
+  });
+
+  it('refuses a corrupt open-purchase record and names the file to remove', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [paymentRequired]);
+    buyEndpoints(s);
+    const file = join(s.storeDir, `open-purchase-${createHash('sha256').update(PRICE_REF).digest('hex')}.json`);
+    writeFileSync(file, '{"purchaseId":');
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.UNEXPECTED);
+
+    expect(errText(s)).toContain(file);
+    expect(bought(s)).toBe(false);
+  });
+
+  it('names the record and the purchase when a settled purchase is still answered 402', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [paymentRequired]);
+    buyEndpoints(s);
+    const file = join(s.storeDir, `open-purchase-${createHash('sha256').update(PRICE_REF).digest('hex')}.json`);
+    writeFileSync(file, JSON.stringify({ purchaseId: PURCHASE, offerId: OFFER, priceRef: PRICE_REF }));
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.CONFLICT);
+
+    expect(errText(s)).toContain(file);
+    expect(errText(s)).toContain(PURCHASE);
+    expect(bought(s)).toBe(false);
+  });
+
+  it('refuses an OARS_BUY_CAP_USD of Infinity', async () => {
+    const s = scene({ OARS_BUY_CAP_USD: 'Infinity' });
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.USAGE);
+
+    expect(s.calls).toEqual([]);
   });
 
   it('refuses a bad OARS_BUY_CAP_USD before anything is called', async () => {
