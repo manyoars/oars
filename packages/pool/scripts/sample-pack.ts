@@ -1158,7 +1158,7 @@ const landedOf = async (git: Git, root: string | null, shas: readonly string[]):
 
 /** The session's id as its transcript file names it: a Codex or other source's store id is `<harness>-<id>`. */
 // Exhaustive over the harnesses that prefix their store ids: a new `Harness` member fails to compile here until it is listed.
-const PREFIXED_HARNESSES: { [K in Exclude<Harness, 'claude-code'>]: true } = { cursor: true, codex: true, copilot: true, gemini: true, grok: true, opencode: true, pi: true, 'vscode-copilot': true, otel: true };
+const PREFIXED_HARNESSES: { [K in Exclude<Harness, 'claude-code'>]: true } = { cursor: true, codex: true, copilot: true, gemini: true, antigravity: true, grok: true, opencode: true, pi: true, 'vscode-copilot': true, otel: true };
 const PREFIXED = Object.keys(PREFIXED_HARNESSES);
 
 /** A store id as its transcript file names it, from the id alone: `codex-<id>` is `<id>`. `recipients` matches a query against both forms, as an objection may name either. */

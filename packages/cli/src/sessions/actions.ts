@@ -304,6 +304,28 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: false,
     shells: { run_shell_command: 'bash', PowerShell: 'powershell' },
   },
+  // Antigravity's tool names, as its transcript writes them (closed source; read from the shape of a local store, so the list is what was seen, not a vendor's). Its adapter
+  // names the file, search, web, and command calls in the Claude Code vocabulary for the extractor and keeps the Antigravity name in `native`, which is what this table
+  // looks up. A tool or step type not listed is `other` and its name stays out of class P.
+  antigravity: {
+    rows: {
+      view_file: 'file.read',
+      list_dir: 'file.search',
+      grep_search: 'file.search',
+      write_to_file: 'file.write',
+      replace_file_content: 'file.edit',
+      multi_replace_file_content: 'file.edit',
+      run_command: 'shell.exec',
+      PowerShell: 'shell.exec',
+      search_web: 'web.search',
+      read_url_content: 'web.fetch',
+      invoke_subagent: 'agent.spawn',
+      send_message: 'other',
+    },
+    mcp: null,
+    toolDelimited: false,
+    shells: { run_command: 'bash', PowerShell: 'powershell' },
+  },
   // Grok Build's own names (xai-org/grok-build @ 2bdd1d6, crates/codegen/xai-grok-tools): a tool's `title` is its name. A shell call and an edit reach the
   // transcript as `Bash` and `Edit` with the original name in `native`, which is what this table looks up. A name the table lacks keeps its own and its step
   // is `other`. An MCP call is `<server>__<tool>` in Grok Build; the reader spells it `mcp__<server>__<tool>`.

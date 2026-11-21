@@ -21,7 +21,7 @@ export const LABEL = 'one fleet';
 /** A row under this many sessions is left out; `--min-sessions` changes it. */
 export const DEFAULT_MIN_SESSIONS = 5;
 /** The harness names, as the store records them (`Harness`); `everyHarnessListed` below fails the compile when a `Harness` is left off it. */
-export const HARNESS_NAMES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
+export const HARNESS_NAMES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'antigravity', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
 export const everyHarnessListed: [Exclude<Harness, (typeof HARNESS_NAMES)[number]>] extends [never] ? true : never = true;
 export const OTHER = 'other';
 export const UNKNOWN = 'unknown';

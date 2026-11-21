@@ -1,6 +1,6 @@
 // One file that yields and one in a changed record shape for every harness the store reads, run through `sessionsVerify`: all three counts per harness.
 // Every store is built under the test's own temp folder; no real harness store is opened.
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
@@ -76,6 +76,18 @@ describe('sessionsVerify, one yielding and one moved-shape file per harness', ()
       // The message type was renamed: the reader drops the chat as one that holds nothing, and counts it as a file whose shape moved.
       { id: C, slug: 'moved', projectRoot: WORK, lines: [geminiHead(C), { id: 'u1', timestamp: T(1), type: 'human', content: [{ text: 'fix the build' }] }] },
     ]);
+    // Antigravity: one conversation of a prompt and a reply, and one whose records name the step kind under another key.
+    const antigravity = join(root, 'antigravity-home');
+    for (const [id, records] of [
+      [A, [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: T(1), content: 'fix the build' }, { step_index: 1, type: 'PLANNER_RESPONSE', source: 'MODEL', status: 'DONE', created_at: T(2), content: 'done' }]],
+      [B, MOVED],
+    ] as const) {
+      const logs = join(antigravity, 'brain', id, '.system_generated', 'logs');
+      mkdirSync(logs, { recursive: true });
+      writeFileSync(join(logs, 'transcript_full.jsonl'), `${records.map((record) => JSON.stringify(record)).join('
+')}
+`);
+    }
     const grok = stageGrok(root, [
       {
         id: A,
@@ -124,10 +136,10 @@ describe('sessionsVerify, one yielding and one moved-shape file per harness', ()
       { name: 'moved.jsonl', lines: [otlpRequest([span('b'.repeat(32), { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'support', 'gen_ai.input.messages': [{ who: 'user', text: 'fix the build' }] })])] },
     ]);
 
-    const runtime = { ...staged.runtime, cursorRoot: cursor, sourceRoots: { copilot, gemini, grok, opencode, pi: join(pi, 'sessions'), 'vscode-copilot': vscode, otel } };
+    const runtime = { ...staged.runtime, cursorRoot: cursor, sourceRoots: { copilot, gemini, antigravity, grok, opencode, pi: join(pi, 'sessions'), 'vscode-copilot': vscode, otel } };
     const verified = await sessionsVerify({ sessions: runtime, install: undefined, now: () => NOW }, { session: undefined });
     const counts = verified.report.harnessFiles;
-    for (const harness of ['copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel']) {
+    for (const harness of ['copilot', 'gemini', 'antigravity', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel']) {
       expect({ harness, counts: counts[harness] }).toEqual({ harness, counts: { seen: 2, yielded: 1, unreadable: 1 } });
     }
     expect(counts['cursor']).toEqual({ seen: 2, yielded: 1, unreadable: 1 });

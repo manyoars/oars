@@ -981,6 +981,35 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
 - *Not read, by choice.* The opt-in telemetry outfile (`--telemetry-outfile`) carries per-request events but is off by default, and the chat file already holds the prompts, calls, and per-message usage, so it is left unread. A torn or unknown line is
   counted as unparseable and skipped; a file with no parseable line is unreadable, named, and left at its old cursor.
 
+## The Antigravity source
+
+`oars sessions deposit --allow antigravity` reads Google Antigravity conversation transcripts into the same store. The records carry `harness: "antigravity"`, take the same field classes,
+redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case. It is one more entry in the source
+table (`sources.ts`); the reader is `antigravity.ts`, and its tool table is `actions.ts`.
+
+**Observation-derived.** Antigravity is closed source and publishes no format, so the reader follows the shape of the files it writes (keys and types only, read from a local store),
+and every test fixture is synthetic. Nothing promises the format: a renamed `type` key makes a file read as nothing, and `sessions verify` counts it as `shapeMoved`.
+
+- **Where.** `$ANTIGRAVITY_HOME` (an oars-only override, for tests), else the home, then `.gemini/antigravity` (`%USERPROFILE%\.geminintigravity` on Windows, beside Gemini CLI's own
+  `.gemini`): `brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`, one session per conversation. `transcript.jsonl` beside it holds the same records with stringified
+  arguments and is not read. `conversations/<conversationId>.db` (SQLite, protobuf step payloads) is not read either. Like the other sources: read by default; `--allow` narrows and
+  `--deny antigravity` keeps it out; read-only, with its own cursor (`antigravity/<id>` in `state.json`, size and mtime).
+- **Record.** A line is `{step_index, type, source, status, created_at, content?, thinking?, error?, error_code?, tool_calls?[{name, args}]}`. `source` is `USER_EXPLICIT`, `MODEL`, or `SYSTEM`;
+  `status` is `DONE` or `RUNNING`. `step_index` can skip numbers, so the order of the lines is the order of the conversation.
+- **Mapping.** `USER_INPUT` is a prompt. `PLANNER_RESPONSE` is a model turn: its `content` is the text, its `tool_calls` are the calls (they carry no id, so each gets a made-up one), and its
+  `thinking` is not read. A call's result is a later step of the type its tool writes (`view_file` to `VIEW_FILE`, `list_dir` to `LIST_DIRECTORY`, `grep_search` to `GREP_SEARCH`, `search_web` to
+  `SEARCH_WEB`, `read_url_content` to `READ_URL_CONTENT`, `run_command` to `RUN_COMMAND`, the three edit tools to `CODE_ACTION`, `invoke_subagent` to `INVOKE_SUBAGENT`, and any other tool, `send_message`
+  included, to `GENERIC`), matched to the oldest call waiting for that type. A `RUNNING` step has no result yet, so its call stays unsettled. An `ERROR_MESSAGE` that comes while a call
+  waits is that call's failure (its `error` is the error line); with none waiting it is the harness's notice and carries no turn. `CHECKPOINT`, `CONVERSATION_HISTORY`, `EPHEMERAL_MESSAGE`, and
+  `SYSTEM_MESSAGE` are what the harness writes to itself and are not read. A step type or tool the reader does not know is never dropped: it becomes a generic call named for it, which the action
+  table files as `other`, and so does a tool step whose call the file left out. The tools are named in the Claude Code vocabulary for the extractor (`view_file` is `Read`, `write_to_file` is
+  `Write`, the two replace tools are `Edit`, `grep_search` is `Grep`, `search_web` is `WebSearch`, `read_url_content` is `WebFetch`) with the Antigravity name in `native`; `run_command` is
+  `PowerShell` when a path in the conversation is written the Windows way, else `Bash`. `invoke_subagent` is `agent.spawn`; no subagent conversation is read, because the file links none.
+- **Not in the file.** The JSONL has no model, no token usage, no working directory, and no tool-call id, so a session here has no model and no usage, and its folder is null. They likely sit in
+  the `.db`'s `gen_metadata` protobuf, which has no public schema and is not decoded. The exit code of a command is not a field either, so a `RUN_COMMAND` step with `status: DONE` reads as ok.
+- **Unproven.** Whether the `ERROR_MESSAGE` of a failed call comes in place of its result step (the reader assumes so), whether `GENERIC` is the step of `send_message` (assumed from the counts),
+  and the shape of `invoke_subagent`'s step have each been seen only on one machine's store.
+
 ## The Grok Build source
 
 `oars sessions deposit --allow grok` reads Grok Build (xAI's `grok` CLI) session logs into the same store. The records carry `harness: "grok"`, take the same field

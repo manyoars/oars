@@ -45,6 +45,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   // VS Code Copilot Chat's reader records no permission mode either.
   'vscode-copilot': new Set(),
   gemini: new Set(),
+  // Antigravity's transcript records no permission mode, so no value is documented to keep.
+  antigravity: new Set(),
   cursor: new Set(),
   // Grok Build's reader reads no mode (its `current_mode_update` carries one, but this reader does not read it), so no value is documented to keep.
   grok: new Set(),
@@ -69,6 +71,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   'vscode-copilot': { interrupts: false, rejections: false, denials: false, timing: true },
   // Gemini CLI's reader writes each message with its own time (so the runs are real), and reads no interrupt, refusal, or denial: the chat file holds a cancelled call as an error and no more.
   gemini: { interrupts: false, rejections: false, denials: false, timing: true },
+  // Antigravity's reader writes each step with its own time (so the runs are real), and reads no interrupt, refusal, or denial: its transcript holds a failed call as an error step and no more.
+  antigravity: { interrupts: false, rejections: false, denials: false, timing: true },
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
   // Grok Build's reader writes the prompts and replies with their line times (seconds), and reads no cancel, tool refusal, or hook denial.
   grok: { interrupts: false, rejections: false, denials: false, timing: true },

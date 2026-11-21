@@ -108,7 +108,7 @@ export const CARD_LINE_ARMS = ['shown', 'held', 'not_due'] as const;
 export type CardLineArm = (typeof CARD_LINE_ARMS)[number];
 /** The read families a recall can serve, as the program names them. */
 export const RECALL_FAMILY_NAMES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day', 'version-boundary', 'substitution', 'interaction', 'day-move', 'entity'] as const;
-export const FETCH_HARNESSES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel', 'other'] as const;
+export const FETCH_HARNESSES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'antigravity', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel', 'other'] as const;
 
 const BYTES = 1 << 26;
 const COUNT = 1_000_000;
