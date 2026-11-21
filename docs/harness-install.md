@@ -5,10 +5,11 @@ Each harness below lists `oars` from a manifest in this repository. Each harness
 | Harness | One line | What it adds | Manifest |
 |---|---|---|---|
 | Claude Code | `/plugin marketplace add manyoars/oars`, then `/plugin install oars@manyoars` (Claude Code 2.1.275 or later: `/plugin install oars --marketplace manyoars/oars`) | The recall hooks, the recall MCP server, and the `oars-recall` skill | `.claude-plugin/marketplace.json`, `.claude-plugin/plugin.json` |
-| Codex | `codex plugin marketplace add manyoars/oars`, then install `oars` from that marketplace in the plugin directory | The recall MCP server and the `oars-recall` skill; no hooks | `.agents/plugins/marketplace.json`, `plugin.json`, `mcp.json` |
+| Codex | `codex plugin marketplace add manyoars/oars`, then `codex plugin add oars@manyoars` | The recall MCP server and the `oars-recall` skill; no hooks | `.agents/plugins/marketplace.json`, `plugin.json`, `mcp.json` |
 | Gemini CLI | `gemini extensions install https://github.com/manyoars/oars` | The recall MCP server and the `oars-recall` skill | `gemini-extension.json`, `skills/oars-recall/SKILL.md` |
 | Any MCP client | `npx -y @manyoars/oars sessions recall --mcp` as a stdio server | The `oars_recall` tool | `server.json` (the MCP registry entry, `io.github.manyoars/oars`) |
 | Skill only | `npx skills add manyoars/oars` | The `oars-recall` skill | `skills/oars-recall/SKILL.md` |
+| Any harness, nothing installed for readers | `oars sessions recall --context --write` once in the repository, then commit the file it names | The repository's recurring errors, as a block between two marker lines in the instruction file your harness reads; an agent that opens the file sees them with oars not installed | no manifest; the block is text in your own file |
 
 ## What each one does
 
