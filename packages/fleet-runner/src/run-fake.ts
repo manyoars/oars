@@ -5,11 +5,11 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { makeFake } from './fake-harness.js';
-import { loadTaskSet, parseFleet } from './manifest.js';
+import { makeFake, type Script } from './fake-harness.js';
+import { loadTaskSet, parseFleet, type TaskSetManifest } from './manifest.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
-import { serializeRunBook } from './runbook.js';
+import { serializeRunBook, type RunBook } from './runbook.js';
 import { refuseInsideRepository } from '../../pool/scripts/real-work-table.js';
 import { buildStores, makeStager, readStores, type Stager } from './stores.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
@@ -17,6 +17,16 @@ import { FLEET, retestText, taskSet } from './test-fixtures.js';
 const flag = (argv: string[], name: string): string | undefined => {
   const at = argv.indexOf(name);
   return at === -1 ? undefined : argv[at + 1];
+};
+
+// The no-flags demo: the default order text and task set, and the adapter script (the run at `changeAt` swaps the task-set version, every 9th run hits a rate limit).
+export const demoInputs = (): { orderText: string; taskSet: TaskSetManifest } => ({ orderText: retestText({ runCap: 60 }), taskSet: taskSet(8) });
+
+export const demoScript = (changeAt: number): Script => (request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {});
+
+export const runsLine = (book: RunBook, runCap: number): string => {
+  const voided = book.runs.filter((run) => run.void !== null).length;
+  return `runs: ${String(book.runs.length)} written, ${String(book.runs.length - voided)} valid, ${String(voided)} void (cap ${String(runCap)})`;
 };
 
 export const main = async (argv: string[], print: (line: string) => void, clock: () => Date = () => new Date()): Promise<number> => {
@@ -35,15 +45,15 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
     // Before anything runs: the run book, signature, stores, staging copies, and rows are published by the page build, never committed.
     refuseInsideRepository(out, 'run book outputs');
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));
-    const order = parseOrder(orderPath === undefined ? retestText({ runCap: 60 }) : await readFile(orderPath, 'utf8'), fleet);
-    const tasks = tasksetPath === undefined ? taskSet(8) : await loadTaskSet(tasksetPath);
+    const demo = demoInputs();
+    const order = parseOrder(orderPath === undefined ? demo.orderText : await readFile(orderPath, 'utf8'), fleet);
+    const tasks = tasksetPath === undefined ? demo.taskSet : await loadTaskSet(tasksetPath);
     stager = makeStager(join(out, `${order.orderId}.staging`));
-    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.', stage: stager.stage });
+    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake(demoScript(changeAt)), clock, operator: 'Many Oars Co.', stage: stager.stage });
     const path = join(out, `${order.orderId}.run-book.jsonl`);
     await writeFile(path, serializeRunBook(book));
-    const voided = book.runs.filter((run) => run.void !== null).length;
     print(`order ${order.orderId} (${order.line}, task set ${order.taskSetVersion}): ${book.header.status}`);
-    print(`runs: ${String(book.runs.length)} written, ${String(book.runs.length - voided)} valid, ${String(voided)} void (cap ${String(order.runCap)})`);
+    print(runsLine(book, order.runCap));
     for (const cell of book.header.shortCells) print(`short: ${cell.taskId} ${cell.arm} ${cell.side ?? '-'} ${String(cell.have)}/${String(cell.want)}`);
     print(`run book (unsigned): ${path}`);
     const folders = await buildStores(book, stager, out);
