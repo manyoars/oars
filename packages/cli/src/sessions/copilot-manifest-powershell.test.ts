@@ -1,7 +1,7 @@
 // The manifest's `powershell` command, run under a real `pwsh` against a stub `oars-hook` that echoes its stdin: Windows PowerShell decodes a piped UTF-8 payload in the console's
 // code page unless the command sets the encodings, and `modifiedTransformedPrompt` replaces the model-facing prompt, so a mangled prompt would reach the model. A shell that is not installed is not run.
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +33,8 @@ type Launcher = 'cmd' | 'npm';
 
 /** A folder holding an `oars-hook` that writes its stdin bytes back unchanged, in the platform's own launcher kind (a `.cmd` on Windows, a script elsewhere; `npm` adds the `.ps1`, shaped like npm's `$input | & node ... $args`). */
 const stubFolder = (launcher: Launcher = 'cmd'): string => {
-  const folder = mkdtempSync(join(tmpdir(), 'oars-ps-stub-'));
+  // The long form: a runner's temp dir comes back from `tmpdir()` as an 8.3 short path (`RUNNER~1`), while PowerShell's `Get-Command` reports the long one.
+  const folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'oars-ps-stub-')));
   made.push(folder);
   const echo = join(folder, 'echo.mjs');
   writeFileSync(echo, 'const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\nprocess.stdout.write(Buffer.concat(chunks));\n');
@@ -84,8 +85,7 @@ describe.each(installed)('the manifest powershell command under %s', (shell) => 
     expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
   });
 
-  // A guard, not a discriminator: starting the child from a DBCS console encoding (936) keeps the payload intact. Measured on 936, 932, 950, 949, 1252, and 437, the round trip survives with or without the
-  // command's `[Console]::OutputEncoding` statement when stdout is a pipe (as Copilot runs hooks), so that statement is hardening that is pinned by string in hook-dialect.test.ts, not proved red by behavior here.
+  // Starting the child from a DBCS console encoding (936) must not corrupt the payload: it fails without the command's `[Console]::InputEncoding` statement (6 failures with it removed, this case among them).
   it.runIf(process.platform === 'win32')('keeps the payload byte for byte when the child starts from a DBCS console encoding (code page 936)', async () => {
     const payload = JSON.stringify({ sessionId: 's', cwd: 'work/app', prompt: 'raw', transformedPrompt: 'say “hello” to René \u{1F680} — café' });
     const command = `[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(936); ${powershellOf('userPromptTransformed')}`;

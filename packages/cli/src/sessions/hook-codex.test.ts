@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ACTION_TABLES, actionOf, HOOK_TOOLS } from './actions.js';
 import { denialOf, slugOf } from './allow.js';
-import { CLAUDE_DIALECT, codexDialect, dialectOf, harnessFlag } from './hook-dialect.js';
+import { CLAUDE_DIALECT, codexDialect, dialectOf, harnessFlag, type Dialect } from './hook-dialect.js';
 import { indexPath, readIndex, type HookIndex } from './hook-index.js';
 import { HOOK_EVENTS, runHook } from './hooks.js';
 import { armOf, readRecalls } from './recall-object.js';
@@ -289,7 +289,7 @@ describe('the exit line of a finished command', () => {
 
 describe('the version a hook-call event states', () => {
   // A Codex rollout is not a Claude Code transcript: a line shaped like Claude's (`version`, `message.model`) in its tail must not become the event's harness version or model.
-  const stated = async (dialect: typeof codex): Promise<object | undefined> => {
+  const stated = async (dialect: Dialect): Promise<object | undefined> => {
     const made = await staged();
     const file = rolloutFile(made, [JSON.stringify({ type: 'assistant', version: '9.9.9', message: { model: 'claude-opus-4-5' } })]);
     const events: object[] = [];
