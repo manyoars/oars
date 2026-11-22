@@ -383,6 +383,6 @@ describe('the userEmail block of an opening context', () => {
     const out = redactTranscript(`${JSON.stringify(meta)}\n${JSON.stringify(blob)}\n`, [], [], KEY).text;
     expect(out).not.toContain(ADDRESS);
     expect(out).not.toContain('userEmail');
-    expect(out.split(String.fromCharCode(10))[1]).toContain(`[injected meta ${hashOf(block)}]`);
+    expect(out.split('\n')[1]).toContain(`[injected meta ${hashOf(block)}]`);
   });
 });
