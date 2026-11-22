@@ -5,9 +5,9 @@
 // The dialect is named by the hook command (`oars-hook session-start --harness copilot`), not guessed from the payload. A payload's casing says only how the harness spelled that
 // one event (Copilot sends snake_case for a PascalCase registration and camelCase for a camelCase one, and `userPromptTransformed` is camelCase only), so a guess from the
 // casing would read the same payload two ways; the manifest that registers the command is the one place that knows which harness will run it.
-import { open } from 'node:fs/promises';
+import { open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { copilotRoot } from './copilot.js';
+import { ARCHIVE, copilotRoot, SAFE_ID } from './copilot.js';
 import type { Harness } from './schema.js';
 
 type Input = { [key: string]: unknown };
@@ -60,13 +60,11 @@ const argsOf = (value: unknown): unknown => {
 /** How much of `events.jsonl` the version read looks at: `session.start` is its first event, so a head is enough and the read stays bounded. */
 const HEAD_BYTES = 16 * 1024;
 
-/** The `copilotVersion` of a session's `session.start` event, from the head of `session-state/<id>/events.jsonl`; null when the file, the event, or the field is not there. */
-export const copilotVersionOf = async (root: string, sessionId: string): Promise<string | null> => {
-  // A session id names a folder: one with a separator in it names no session of ours.
-  if (/[\\/]/.test(sessionId) || sessionId === '..') return null;
+/** The `copilotVersion` of the first `session.start` in the head of one events file; null when the file, the event, or the field is not there. */
+const headVersionOf = async (file: string): Promise<string | null> => {
   let handle;
   try {
-    handle = await open(join(root, 'session-state', sessionId, 'events.jsonl'), 'r');
+    handle = await open(file, 'r');
   } catch {
     return null;
   }
@@ -86,6 +84,35 @@ export const copilotVersionOf = async (root: string, sessionId: string): Promise
   } finally {
     await handle.close();
   }
+};
+
+/** The lowest-numbered rotated archive `events.N.jsonl` in a session folder (the reader's oldest-first order), or undefined when the session has none. */
+const oldestArchiveOf = async (folder: string): Promise<string | undefined> => {
+  let names: string[];
+  try {
+    names = await readdir(folder);
+  } catch {
+    return undefined;
+  }
+  const numbered = names.flatMap((name) => {
+    const n = ARCHIVE.exec(name)?.[1];
+    return n === undefined ? [] : [{ name, n: Number(n) }];
+  });
+  return numbered.sort((a, b) => a.n - b.n)[0]?.name;
+};
+
+/**
+ * The `copilotVersion` of a session's `session.start` event, from the head of `session-state/<id>/events.jsonl`. A rotated session's live head may hold only a journal link and
+ * checkpoint replays (copilot.ts), so when it has no `session.start` the head of the lowest-numbered archive, where the session began, is read instead. Null when none states it.
+ */
+export const copilotVersionOf = async (root: string, sessionId: string): Promise<string | null> => {
+  // A session id names a folder: one with a separator in it names no session of ours.
+  if (!SAFE_ID.test(sessionId)) return null;
+  const folder = join(root, 'session-state', sessionId);
+  const live = await headVersionOf(join(folder, 'events.jsonl'));
+  if (live !== null) return live;
+  const oldest = await oldestArchiveOf(folder);
+  return oldest === undefined ? null : headVersionOf(join(folder, oldest));
 };
 
 /**

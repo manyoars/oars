@@ -5,7 +5,7 @@
       {
         "type": "command",
         "bash": "command -v oars-hook >/dev/null || exit 0; oars-hook session-start --harness copilot",
-        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::In.ReadToEnd() | oars-hook session-start --harness copilot",
+        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook session-start --harness copilot",
         "timeoutSec": 5
       }
     ],
@@ -13,7 +13,7 @@
       {
         "type": "command",
         "bash": "command -v oars-hook >/dev/null || exit 0; oars-hook post-tool --harness copilot",
-        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::In.ReadToEnd() | oars-hook post-tool --harness copilot",
+        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook post-tool --harness copilot",
         "timeoutSec": 5
       }
     ],
@@ -21,7 +21,7 @@
       {
         "type": "command",
         "bash": "command -v oars-hook >/dev/null || exit 0; oars-hook stop --harness copilot",
-        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::In.ReadToEnd() | oars-hook stop --harness copilot",
+        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook stop --harness copilot",
         "timeoutSec": 30
       }
     ],
@@ -29,7 +29,7 @@
       {
         "type": "command",
         "bash": "command -v oars-hook >/dev/null || exit 0; oars-hook prompt --harness copilot",
-        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::In.ReadToEnd() | oars-hook prompt --harness copilot",
+        "powershell": "if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook prompt --harness copilot",
         "timeoutSec": 5
       }
     ]

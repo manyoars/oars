@@ -87,10 +87,11 @@ export interface CopilotStore {
   unreadable: { file: string; reason: string }[];
 }
 
-const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
+/** A session folder name the reader and the hook dialect both accept: no separator, and not only dots. */
+export const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 const EVENTS = 'events.jsonl';
 /** A rotated archive's name; N counts up as the log rotates (docs/features/session-persistence.md, "Linked event journals"); the reader orders by N and does not follow each head's `previousFile`. */
-const ARCHIVE = /^events\.(\d+)\.jsonl$/;
+export const ARCHIVE = /^events\.(\d+)\.jsonl$/;
 /** How many leading lines are searched for `session.start`; a rotated head may begin with a `session.journal_link` and checkpoint events. */
 const HEAD_LINES = 8;
 

@@ -71,7 +71,7 @@ describe('the Copilot hooks manifest', () => {
     const entry = entryOf(event);
     expect(entry.type).toBe('command');
     expect(String(entry.bash)).toBe(`command -v oars-hook >/dev/null || exit 0; oars-hook ${hook} --harness copilot`);
-    expect(String(entry.powershell)).toBe(`if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::In.ReadToEnd() | oars-hook ${hook} --harness copilot`);
+    expect(String(entry.powershell)).toBe(`if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook ${hook} --harness copilot`);
     expect(typeof entry.timeoutSec).toBe('number');
   });
 
@@ -179,6 +179,26 @@ describe('the harness a Copilot recall is read and tagged under', () => {
     expect(String(output.additionalContext)).toContain('file.edit x9');
     expect(String(output.additionalContext)).not.toContain('file.read');
     expect((await readRecalls(made.storeDir))[0]?.frame).toMatchObject({ harness: 'copilot', harnessVersion: VERSION });
+  });
+
+  it('reads the version from the oldest rotated archive when the live head has no session.start, and prefers the live one when it has it', async () => {
+    const start = (version: string): unknown => copilotEvent('2026-11-20T00:00:00Z', 'session.start', { copilotVersion: version });
+    const link = copilotEvent('2026-11-20T01:00:00Z', 'session.journal_link', { previousFile: 'events.1.jsonl' });
+    const made = await staged();
+    const home = stageCopilot(made.root, [
+      // Archives are written out of order on purpose: 2 holds a later start, 10 sorts after 2 as a number and before it as a string, and 1 is the oldest.
+      { id: 'rotated', lines: [link], archives: [{ n: 10, lines: [start('9.9.9')] }, { n: 1, lines: [start('1.0.1')] }, { n: 2, lines: [start('2.0.2')] }] },
+      { id: 'live-first', lines: [start('3.0.3')], archives: [{ n: 1, lines: [start('1.0.1')] }] },
+      { id: 'bare-archive', lines: [link], archives: [{ n: 1, lines: [copilotEvent('2026-11-20T00:00:00Z', 'session.start', { sessionId: 'x' })] }] },
+      { id: 'no-archive', lines: [link] },
+    ]);
+    expect(await copilotVersionOf(home, 'rotated')).toBe('1.0.1');
+    expect(await copilotVersionOf(home, 'live-first')).toBe('3.0.3');
+    expect(await copilotVersionOf(home, 'bare-archive')).toBeNull();
+    expect(await copilotVersionOf(home, 'no-archive')).toBeNull();
+    // A session id the reader would refuse is refused here too.
+    expect(await copilotVersionOf(home, 'a/b')).toBeNull();
+    expect(await copilotVersionOf(home, '...')).toBeNull();
   });
 
   it('still answers with no version when the session-state file is missing, has no session.start, or the id names no folder', async () => {
