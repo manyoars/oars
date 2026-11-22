@@ -367,7 +367,11 @@ describe('the userEmail block of an opening context', () => {
     const second = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: `${reminder(FILLER)}\n${block}` }] } };
     const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: block }] } };
     const result = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: `output\n${block}` }] } };
-    for (const line of [second, meta, result]) expect(deposit(line)).not.toContain(ADDRESS);
+    for (const line of [second, meta, result]) {
+      expect(deposit(line)).not.toContain(ADDRESS);
+      expect(deposit(line)).not.toContain('userEmail');
+    }
+    expect(deposit(meta)).toContain(`[injected meta ${hashOf(block)}]`);
     expect(deposit(second)).toContain(`[injected system-reminder ${hashOf(block)}]`);
     expect(deposit(result)).toContain(`[injected system-reminder ${hashOf(block)}]`);
   });
@@ -378,5 +382,7 @@ describe('the userEmail block of an opening context', () => {
     const blob = { type: 'api-request-blob', message: { role: 'user', content: [{ type: 'text', text: block }] } };
     const out = redactTranscript(`${JSON.stringify(meta)}\n${JSON.stringify(blob)}\n`, [], [], KEY).text;
     expect(out).not.toContain(ADDRESS);
+    expect(out).not.toContain('userEmail');
+    expect(out.split(String.fromCharCode(10))[1]).toContain(`[injected meta ${hashOf(block)}]`);
   });
 });
