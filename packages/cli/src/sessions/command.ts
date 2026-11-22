@@ -18,7 +18,7 @@ import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
-import { receiptOf, RECEIPT_MISS } from './receipt.js';
+import { foldUnlistedTools, receiptOf, RECEIPT_MISS, scrubLiterals } from './receipt.js';
 import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
@@ -226,7 +226,7 @@ const readIfThere = async (path: string): Promise<string | undefined> => {
 
 /**
  * `recall --context --write [file]`: the `--context` block, kept between two marker lines in an instruction file. With no file named the target sits at the git top level of
- * `--cwd` (see `chooseFile`); a named file is taken from `--cwd`. Each line passes the redaction `--receipt` applies and the exclusion terms file, and one that trips either is dropped
+ * `--cwd` (see `chooseFile`); a named file is taken from `--cwd`. Each line passes the redaction `--receipt` applies (the transcript rules, the recorded branch and project names, the unlisted `mcp__` tools) and the exclusion terms file, and one that trips either is dropped
  * whole. A run whose lines are already on disk writes nothing. Git is never run: the file is the user's to commit.
  */
 export const sessionsContextWrite = async (deps: SessionsDeps, options: ContextOptions, write: { file: string | undefined; dryRun: boolean }, env: NodeJS.ProcessEnv): Promise<Outcome> => {
@@ -256,7 +256,11 @@ export const sessionsContextWrite = async (deps: SessionsDeps, options: ContextO
   const terms = await loadTerms(exclusionPaths(runtime.projectsRoot, env).terms);
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
-  const { kept, dropped } = keepLines(entries, (line) => redactTranscript(line, domains, names).text !== line, terms);
+  // What `--receipt` applies, and a line it would change is dropped whole instead: the transcript rules, the branch and project literals the store records for this
+  // repository's sessions, and the unlisted `mcp__` tool words (`next:` prints raw tool names).
+  const recorded = (await loadStore(runtime.storeDir)).sessions.filter((session) => inRepository(session.project, options.cwd));
+  const changes = (line: string): boolean => redactTranscript(line, domains, names).text !== line || scrubLiterals(recorded, line) !== line || foldUnlistedTools(line) !== line;
+  const { kept, dropped } = keepLines(entries, changes, terms);
   const droppedLine = `Lines dropped for a name, a secret, an excluded term, or a link: ${String(dropped)}.`;
   if (kept.length === 0) return { document: { ok: true, context, write: null }, text: [...notices, 'Every line of the block was dropped, so nothing was written.', droppedLine].join('\n') };
   const plan = planWrite(existing, [header, ...kept], new Date(deps.now()).toISOString().slice(0, 10));

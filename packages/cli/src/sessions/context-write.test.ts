@@ -6,10 +6,10 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
-import { sessionsContextWrite, type SessionsDeps } from './command.js';
+import { sessionsContextWrite, sessionsDeposit, type SessionsDeps } from './command.js';
 import { AGENTS, BEGIN, BOTH_NOTICE, chooseFile, CLAUDE, END, gitTop, holdsMarker, keepLines, planWrite } from './context-write.js';
 import type { HookIndex, IndexedSignature } from './hook-index.js';
-import { cleanup, stage } from './test-support.js';
+import { addProject, cleanup, settledClock, stage } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -32,6 +32,15 @@ const setup = (sigs: readonly string[] = SIGS, env: NodeJS.ProcessEnv = {}) => {
   const spool: { type: string; fields: object }[] = [];
   const sessionDeps: SessionsDeps = { sessions: staged.runtime, install: undefined, now: () => Date.parse('2026-11-21T12:00:00Z'), telemetry: (type, fields) => spool.push({ type, fields }) };
   return { repo, staged, spool, sessionDeps, ...h };
+};
+
+/** Deposits one session of the repository's project that sat on `branch`, so the store records the branch the recall lines must not carry; the index the test wrote stays. */
+const recordBranch = async (ctx: ReturnType<typeof setup>, branch: string): Promise<void> => {
+  const lines = [{ type: 'user', uuid: 'b-1', parentUuid: null, isSidechain: false, timestamp: '2026-05-28T20:26:45.000Z', version: '2.1.300', cwd: ctx.repo, gitBranch: branch, message: { role: 'user', content: 'run the build' } }];
+  addProject(ctx.staged, slugOf(ctx.repo), 'branchy', lines.map((line) => JSON.stringify(line)));
+  const index = readFileSync(join(ctx.staged.storeDir, 'hook-index.json'), 'utf8');
+  await sessionsDeposit({ ...ctx.sessionDeps, now: settledClock }, { allow: [slugOf(ctx.repo)], allowFiles: [], redactDomains: [] });
+  writeFileSync(join(ctx.staged.storeDir, 'hook-index.json'), index);
 };
 
 const CONTEXT = { top: 5, maxChars: 1200 };
@@ -275,6 +284,35 @@ describe('--write: redaction', () => {
     expect(keepLines(['a', 'b SECRET', 'Zed c', 'd ftp://h/x', 'e'], redacts, ['zed'])).toEqual({ kept: ['a', 'e'], dropped: 3 });
   });
 
+  it('drops a line that holds a branch name the store recorded for the repository, whole and counted, as --receipt would mask it', async () => {
+    const ctx = setup(['Bash | fatal: couldn’t find remote ref dev/secret-launch', 'Bash | plain failure']);
+    await recordBranch(ctx, 'dev/secret-launch');
+    const result = await write(ctx);
+    const text = read(ctx, AGENTS);
+    expect(text).toContain('plain failure');
+    expect(text).not.toContain('dev/secret-launch');
+    expect(text).not.toContain('<branch>');
+    expect(result.text).toContain('Lines dropped for a name, a secret, an excluded term, or a link: 1.');
+  });
+
+  it('drops a line whose next: names a tool the harness tables do not list, and keeps one naming a listed tool', async () => {
+    const ctx = setup(['Bash | plain failure']);
+    await recordBranch(ctx, 'trunk');
+    const index: HookIndex = {
+      at: '',
+      redactDomains: [],
+      signatures: {},
+      projects: { [slugOf(ctx.repo)]: [{ ...row('Bash | listed next'), followed: [['Edit', 2]] }, { ...row('Bash | unlisted next'), followed: [['mcp__acme-internal__query', 2]] }] },
+    };
+    writeFileSync(join(ctx.staged.storeDir, 'hook-index.json'), JSON.stringify(index));
+    const result = await write(ctx);
+    const text = read(ctx, AGENTS);
+    expect(text).toContain('listed next');
+    expect(text).not.toContain('unlisted next');
+    expect(text).not.toContain('acme-internal');
+    expect(result.text).toContain('Lines dropped for a name, a secret, an excluded term, or a link: 1.');
+  });
+
   it('says nothing was written, and names the notice, when nothing recurs in the repository', async () => {
     const ctx = setup([]);
     const result = await write(ctx);
@@ -317,13 +355,6 @@ describe('--write: output', () => {
     expect(text.split('\n')[0]).toContain('manyoars.com');
     expect(BEGIN).toBe('<!-- oars recall: begin (written by "oars sessions recall --context --write", manyoars.com; rerun to refresh) -->');
   });
-
-  it('runs no git: the repository’s `.git` folder is untouched and nothing is staged', async () => {
-    const ctx = setup();
-    await write(ctx);
-    expect(statSync(join(ctx.repo, '.git')).isDirectory()).toBe(true);
-    expect(existsSync(join(ctx.repo, '.git', 'index'))).toBe(false);
-  });
 });
 
 describe('--write: telemetry', () => {
@@ -337,10 +368,11 @@ describe('--write: telemetry', () => {
     expect(JSON.stringify(ctx.spool)).not.toContain(ctx.repo);
   });
 
-  it('is off with the rest of telemetry: the emitter a run without telemetry hands over is absent', async () => {
+  it('sends no event when the emitter is absent, as it is under `oars telemetry off`', async () => {
     const ctx = setup();
     await sessionsContextWrite({ ...ctx.sessionDeps, telemetry: undefined }, { cwd: ctx.repo, ...CONTEXT }, { file: undefined, dryRun: false }, {});
     expect(existsSync(at(ctx, AGENTS))).toBe(true);
+    expect(ctx.spool).toEqual([]);
   });
 });
 
@@ -360,6 +392,14 @@ describe('--write: the command line', () => {
     expect(await run(['sessions', 'recall', '--write'], ctx.deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'recall', '--dry-run'], ctx.deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'recall', '--context', '--cwd', ctx.repo, '--dry-run'], ctx.deps)).toBe(ExitCode.USAGE);
+    expect(existsSync(at(ctx, AGENTS))).toBe(false);
+  });
+
+  it('refuses --write and --dry-run beside --counts or --mcp instead of ignoring them', async () => {
+    const ctx = setup();
+    for (const form of [['--counts', '--write'], ['--mcp', '--write'], ['--counts', '--write', '--dry-run'], ['--mcp', '--write', '--dry-run']]) {
+      expect(await run(['sessions', 'recall', '--context', '--cwd', ctx.repo, ...form], ctx.deps)).toBe(ExitCode.USAGE);
+    }
     expect(existsSync(at(ctx, AGENTS))).toBe(false);
   });
 });

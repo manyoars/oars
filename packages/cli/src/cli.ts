@@ -409,6 +409,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       const options: OptionValues = command.optsWithGlobals();
       const written = options['write'] !== undefined;
       if (!flag(options, 'context') && (written || flag(options, 'dryRun'))) throw new CliError(`${written ? '--write' : '--dry-run'} goes with --context: oars sessions recall --context --write [file].`, ExitCode.USAGE, 'usage');
+      if (written && (flag(options, 'counts') || flag(options, 'mcp'))) throw new CliError('--write and --dry-run write the --context block only: leave out --counts and --mcp.', ExitCode.USAGE, 'usage');
       if (flag(options, 'dryRun') && !written) throw new CliError('--dry-run goes with --write: oars sessions recall --context --write --dry-run.', ExitCode.USAGE, 'usage');
       if (flag(options, 'receipt')) {
         if (flag(options, 'counts') || flag(options, 'mcp') || flag(options, 'context') || list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
