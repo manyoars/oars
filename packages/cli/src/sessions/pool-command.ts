@@ -16,7 +16,7 @@ import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.
 import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeldAcross, shownHashes, wasShown, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type WireGate } from './pool-wire.js';
 import { keepCrewNumber } from './crew-mark.js';
 import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -32,7 +32,7 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
 import { scanCache } from './machine-scan-cache.js';
-import { loadStore, paths, scanLog, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
+import { loadStore, paths, scanLog, localSalt, readRedactDomains, readState, readTranscriptRoots, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -986,7 +986,7 @@ export const poolDeposit = async (
   let builtBytes = 0;
   const wireTally = newTally();
   const refusedFields = new Set<string>();
-  const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+  const roots = await readTranscriptRoots(runtime.storeDir);
   // The sessions that pass both gates and have ended, in the order the store holds them: the windows of a delta are counted over these alone, and the batch of each is built after, once its deltas are known.
   // Only the session records are held for the gates; a session's prompts and tools are read again when its window or its batch needs them (BUILD_CHUNK at a time), so the history is never in memory at once.
   const ready: { records: SessionRecords; key: string }[] = [];

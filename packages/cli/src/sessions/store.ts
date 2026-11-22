@@ -2069,19 +2069,25 @@ const skeletonNames = async (folder: string): Promise<string[]> => {
   }
 };
 
+/** One skeleton file as parsed, or `null` when it is torn, corrupted, or not a skeleton. */
+const parseSkeletonFile = async (folder: string, name: string): Promise<Skeleton | null> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(join(folder, name), 'utf8'));
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+  }
+  return isSkeleton(parsed) ? parsed : null;
+};
+
 /** The named skeleton files, in the order given. `unreadable` counts the files that are torn, corrupted, or not a skeleton. */
 const readSkeletonFiles = async (folder: string, names: readonly string[], lean: boolean): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const skeletons: Skeleton[] = [];
   let unreadable = 0;
   for (const name of names) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await readFile(join(folder, name), 'utf8'));
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-    }
-    if (isSkeleton(parsed)) skeletons.push(withCostFields(parsed, lean));
-    else unreadable += 1;
+    const parsed = await parseSkeletonFile(folder, name);
+    if (parsed === null) unreadable += 1;
+    else skeletons.push(withCostFields(parsed, lean));
   }
   return { skeletons, unreadable };
 };
@@ -2094,6 +2100,21 @@ export const readSkeletons = async (storeDir: string, only?: string, lean = fals
   const folder = paths(storeDir).skeletons;
   const names = (await skeletonNames(folder)).filter((name) => only === undefined || name === `${only}.json`);
   return readSkeletonFiles(folder, names, lean);
+};
+
+/**
+ * Each session's transcript root, read one skeleton file at a time: only `merkleRoot` and `leaves` of a file are kept, so no parsed skeleton outlives its own read. A skeleton is most of a
+ * store's bytes (the operator's: 12,637 files, 1.6 GB), and `readSkeletons` holds every one of them for the build that needs three fields of each. A file that cannot be read is skipped, as
+ * `readSkeletons` counts it unreadable; a session named twice keeps its last file in name order, as a `Map` built from `readSkeletons` does.
+ */
+export const readTranscriptRoots = async (storeDir: string): Promise<Map<string, { merkleRoot: string; leaves: number }>> => {
+  const folder = paths(storeDir).skeletons;
+  const roots = new Map<string, { merkleRoot: string; leaves: number }>();
+  for (const name of await skeletonNames(folder)) {
+    const skeleton = await parseSkeletonFile(folder, name);
+    if (skeleton !== null) roots.set(skeleton.session, { merkleRoot: skeleton.merkleRoot, leaves: skeleton.leaves });
+  }
+  return roots;
 };
 
 /**
