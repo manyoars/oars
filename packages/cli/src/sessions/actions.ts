@@ -478,5 +478,8 @@ export const actionOf = (table: ActionTable, native: string): { action: Canonica
   return { action: mcpOf(table, native) === undefined ? 'other' : 'mcp.call', native: LITERAL };
 };
 
+/** The names a Codex hook payload gives a tool that the rollout's table (`codex`) does not list: the hook contract says `Bash` carries `tool_input.command`. */
+export const HOOK_TOOLS: ReadonlyMap<string, CanonicalAction> = new Map<string, CanonicalAction>([['Bash', 'shell.exec']]);
+
 /** The shell a native tool runs, or null when the table does not say. */
 export const shellOf = (table: ActionTable, native: string): string | null => (Object.hasOwn(table.shells, native) ? (table.shells[native] ?? null) : null);

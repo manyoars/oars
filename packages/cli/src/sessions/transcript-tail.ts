@@ -2,7 +2,7 @@
 import { open, type FileHandle } from 'node:fs/promises';
 
 /** How far back a hook looks in a growing file: enough for the session's latest lines, and a bound on what a hook on every call can cost. */
-const TAIL_BYTES = 64 * 1024;
+export const TAIL_BYTES = 64 * 1024;
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 

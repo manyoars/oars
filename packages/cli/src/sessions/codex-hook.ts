@@ -5,7 +5,7 @@
 // Fail-open: the hook prints nothing, takes no lock, and exits 0 on every error, leaving a note in `hook-calls.jsonl`.
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
+import { ACTION_TABLES, actionOf, HOOK_TOOLS, type CanonicalAction } from './actions.js';
 import { compileAllow, isDenial, slugOf } from './allow.js';
 import { argClassOf, type ArgClass } from './call-shape.js';
 import { appendHookCall } from './hook-calls.js';
@@ -13,9 +13,6 @@ import { mkdirOwnerOnly } from './owner-only.js';
 import { makeRepoRoot } from './repo-root.js';
 import { errorLine, tryLog } from './steps.js';
 import { paths } from './store.js';
-
-// The names the hook payload gives a tool that the rollout's table (`ACTION_TABLES.codex`) does not list: the hook contract says `Bash` and `apply_patch` carry `tool_input.command`.
-const HOOK_TOOLS = new Map<string, CanonicalAction>([['Bash', 'shell.exec']]);
 
 /** The events the installed entry registers, as Codex names them. */
 export const CODEX_HOOK_EVENTS = ['SessionStart', 'PostToolUse', 'PostModelRequest'] as const;
