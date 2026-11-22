@@ -4,6 +4,8 @@ All notable changes to `@manyoars/oars-client`. Versions follow semver.
 
 ## Unreleased
 
+## 0.1.4 (2026-11-22)
+
 - `datasets.search` and `datasets.get` read the public dataset catalog (`GET /billing/datasets`, no credential), and the generated types now carry those two operations.
 - `purchases.offer`, `purchases.buy`, and `purchases.get` read an offer's terms, buy one of its packs with the buying agent's SDK key and an `Idempotency-Key`, and read a purchase back. The generated types now carry the offer, purchase, customer, and credit operations.
 
