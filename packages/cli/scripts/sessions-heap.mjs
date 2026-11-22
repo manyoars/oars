@@ -6,6 +6,7 @@
 //   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
 //   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
+//   node scripts/sessions-heap.mjs pooldeposit [--sessions 2000] [--runs 2] [--heap 8192]  # `oars pool deposit` (the build, no --send) as a machine (OARS_HOST_CLASS, so no sign-in): peak RSS, smallest passing --max-old-space-size, and a digest of the outbox, per run; pair with --bin for a build from before a change
 //   node scripts/sessions-heap.mjs poolwrite [--cells 1190000] [--runs 3] # peak RSS of the pool's cells in a fresh process each: holding them, writing cells.jsonl, and `poolOf` (no store; a generated store has too few cells)
 //
 // Flags every mode takes:
@@ -20,6 +21,7 @@
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
 // when a path the CLI will use is not inside it.
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -203,12 +205,13 @@ const folderMb = (folder) => readdirSync(folder).reduce((sum, name) => sum + siz
  * @param {string[]} args
  * @param {string} [preload]
  * @param {boolean} [recapture]
+ * @param {{ [name: string]: string }} [extraEnv] added to the run's environment (a machine's `OARS_HOST_CLASS`)
  *
  * Runs the built CLI under `--max-old-space-size=<heapMb>` (default heap when 0). With `--require` of a preload that prints the child's
  * peak RSS on exit, the figure reaches `peakMb`. With `recapture`, every file in `state.json` is first marked as captured by an older
  * version, as a CAPTURE_VERSION bump does, so a deposit reads and captures every transcript instead of skipping them all.
  */
-const runCli = (dirs, heapMb, args, preload, recapture = false) => {
+const runCli = (dirs, heapMb, args, preload, recapture = false, extraEnv = {}) => {
   assertScratch(dirs);
   // Each measured run starts from the stored form: a deposit compacts the log and moves the state, and a later run would see a clean one.
   if (existsSync(join(dirs.root, 'clean.jsonl'))) restore(dirs, recapture);
@@ -216,7 +219,7 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
   rmSync(join(dirs.store, 'store.lock'), { force: true });
   const started = Date.now();
   const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
-  const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
+  const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: { ...envOf(dirs), ...extraEnv }, encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
   const peak = /PEAK_RSS_MB (\d+)/.exec(child.stderr)?.[1];
   return { code: child.status, seconds: (Date.now() - started) / 1000, peakMb: peak === undefined ? null : Number(peak), stdout: child.stdout, stderr: child.stderr, oom: /heap out of memory|FATAL ERROR/.test(child.stderr) };
 };
@@ -462,6 +465,70 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
     } finally {
       rmSync(dirs.root, { recursive: true, force: true });
     }
+  }
+} else if (command === 'pooldeposit') {
+  // `oars pool deposit` with no --send, as a machine: OARS_HOST_CLASS makes it build without a sign-in, and an exclusion terms file (one term no session holds) lets every session through the gates.
+  // It reads the skeletons, scans the log, and writes one batch per session into the outbox. Each run starts from the store as built: what an earlier run wrote is removed, so the outbox is empty again.
+  const sessions = Number(arg('sessions', '2000'));
+  const runs = Number(arg('runs', '2'));
+  const dirs = scratch('pooldeposit');
+  const preload = peakPreload();
+  const terms = join(dirs.root, 'terms.txt');
+  writeFileSync(terms, `no-session-holds-this-term${NL}`);
+  const machine = { OARS_HOST_CLASS: 'cloud', OARS_EXCLUSION_TERMS: terms, OARS_ALLOW_REPOS: 'bench/bench' };
+  const poolArgs = ['pool', 'deposit', '--json'];
+  try {
+    const log = build(dirs, sessions);
+    const skeletons = folderMb(join(dirs.store, 'skeletons'));
+    console.log(`${String(sessions)} sessions: ${String(readdirSync(join(dirs.store, 'skeletons')).length)} skeleton files, ${skeletons.toFixed(0)} MB (mean ${((skeletons * 1024) / readdirSync(join(dirs.store, 'skeletons')).length).toFixed(0)} KB), log ${log.toFixed(0)} MB`);
+    const before = new Set(readdirSync(dirs.store));
+    const reset = () => {
+      for (const name of readdirSync(dirs.store)) if (!before.has(name)) rmSync(join(dirs.store, name), { recursive: true, force: true });
+    };
+    /**
+     * One run of the build; `ok` when it finished and batched every session.
+     * @param {number} heapMb
+     * @param {boolean} withPreload
+     */
+    const attempt = (heapMb, withPreload) => {
+      reset();
+      const ran = runCli(dirs, heapMb, poolArgs, withPreload ? preload : undefined, false, machine);
+      let batched;
+      try {
+        batched = JSON.parse(ran.stdout).batched;
+      } catch {
+        batched = undefined;
+      }
+      return { ran, ok: ran.code === 0 && !ran.oom && batched === sessions, batched };
+    };
+    /** A digest of every file the build left in the outbox, by relative path and bytes: equal digests are equal batches. */
+    const digest = () => {
+      const hash = createHash('sha256');
+      for (const name of readdirSync(join(dirs.store, 'pool-outbox'), { recursive: true, encoding: 'utf8' }).sort()) {
+        const file = join(dirs.store, 'pool-outbox', name);
+        if (statSync(file).isFile()) hash.update(name).update(readFileSync(file));
+      }
+      return hash.digest('hex').slice(0, 12);
+    };
+    const heap = Number(arg('heap', '8192'));
+    for (let run = 1; run <= runs; run += 1) {
+      const { ran, ok, batched } = attempt(heap, true);
+      console.log(`run ${String(run)} under --max-old-space-size=${String(heap)}: ${ok ? 'ok' : 'FAILED'}, exit ${String(ran.code)}, batched ${String(batched)}, peak RSS ${String(ran.peakMb)} MB, ${ran.seconds.toFixed(1)} s${ok ? `, outbox digest ${digest()}` : `${NL}${ran.stderr.slice(0, 300)}`}`);
+    }
+    // The smallest heap that passes, in 8 MB steps between 24 MB and the heap above (the first size that exits 0 with every session batched).
+    for (let run = 1; run <= runs; run += 1) {
+      let low = 24;
+      let high = heap;
+      while (high - low > 8) {
+        const mid = Math.floor((low + high) / 16) * 8;
+        if (attempt(mid, false).ok) high = mid;
+        else low = mid;
+      }
+      console.log(`smallest passing heap, run ${String(run)}: ${String(high)} MB`);
+    }
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+    rmSync(join(preload, '..'), { recursive: true, force: true });
   }
 } else if (command === 'phases') {
   const dirs = scratch('phases');

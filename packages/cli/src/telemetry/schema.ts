@@ -196,6 +196,8 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['covenant-shown', rules({ version: covenantVersion })],
   // One step of `oars pool join` in one run: which of the closed steps and what it did, and nothing else (docs/telemetry.md).
   ['join-step', rules({ step: oneOf(JOIN_STEPS), state: oneOf(JOIN_STATES) })],
+  // One `oars sessions recall --context --write` that wrote a file: whether it made the file (1) or updated it (0), and how many recall lines the block holds. No line, no path.
+  ['recall-write', rules({ created: whole(1), lines: whole(COUNT) })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];

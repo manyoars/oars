@@ -6,7 +6,7 @@ import { redactTranscript } from './redact.js';
 import { recall, type RecallQuery } from './query.js';
 import { LITERAL } from './public-vocabulary.js';
 import { closedName } from './recall-render.js';
-import { harnessOf } from './schema.js';
+import { harnessOf, type SessionObservation } from './schema.js';
 import type { Store } from './store.js';
 
 export const RECEIPT_FOOTER = 'from my local oars record, manyoars.com';
@@ -24,6 +24,23 @@ const listedTool = (name: string): string => {
 };
 
 const listedHarness = (name: string): string => (Object.hasOwn(ACTION_TABLES, name) ? name : OTHER);
+
+/** Every unlisted `mcp__` word becomes `other`; a listed one stands. */
+export const foldUnlistedTools = (text: string): string => text.replace(MCP_WORD, (word) => listedTool(word));
+
+/**
+ * The text with the literals the store records for these sessions (branches, project slugs; the transcript rules have no rule for either) replaced as whole tokens,
+ * so a branch named `main` leaves `domain` and `./main.js` alone. `--receipt` masks them; `recall --context --write` drops a line this would change.
+ */
+export const scrubLiterals = (sessions: readonly SessionObservation[], text: string): string => {
+  const labels = new Map<string, string>();
+  for (const entry of sessions) {
+    for (const branch of entry.branches) labels.set(branch, '<branch>');
+    labels.set(entry.project, '<project>');
+  }
+  const literals = [...labels.entries()].filter(([literal]) => literal.length > 0).sort((a, b) => b[0].length - a[0].length || a[0].localeCompare(b[0]));
+  return literals.reduce((current, [literal, label]) => current.replace(new RegExp(`(?<![A-Za-z0-9_-])${literal.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), label), text);
+};
 
 /** ISO 8601 week of a timestamp, as `2026-W45`; the week holds the Thursday, which fixes the year. */
 export const isoWeek = (ts: string): string | undefined => {
@@ -54,16 +71,8 @@ export const receiptOf = (store: Store, query: RecallQuery, now: number, redactD
   // The key is `<tool> | <text>`; the tool is stated by its listed name. The text first loses the literals the store records for the matched sessions
   // (branches, project slugs; the transcript rules have no rule for either), then runs through the transcript rules (home paths, encoded folder slugs,
   // local names, secrets), and only the redacted result is cut. Every unlisted `mcp__` word becomes `other`, with backticks out so the fence holds.
-  const recorded = store.sessions.filter((entry) => sessionIds.has(entry.session));
-  const labels = new Map<string, string>();
-  for (const entry of recorded) {
-    for (const branch of entry.branches) labels.set(branch, '<branch>');
-    labels.set(entry.project, '<project>');
-  }
-  // A literal goes only where it stands as a whole token, so a branch named `main` leaves `domain` and `./main.js` alone.
-  const literals = [...labels.entries()].filter(([literal]) => literal.length > 0).sort((a, b) => b[0].length - a[0].length || a[0].localeCompare(b[0]));
-  const scrubbed = literals.reduce((text, [literal, label]) => text.replace(new RegExp(`(?<![A-Za-z0-9_-])${literal.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), label), top.sig.slice(top.sig.indexOf(' | ') + 3));
-  const text = redactTranscript(scrubbed, redactDomains, names).text.slice(0, SIGNATURE_LIMIT).replace(MCP_WORD, (word) => listedTool(word)).replaceAll('`', "'");
+  const scrubbed = scrubLiterals(store.sessions.filter((entry) => sessionIds.has(entry.session)), top.sig.slice(top.sig.indexOf(' | ') + 3));
+  const text = foldUnlistedTools(redactTranscript(scrubbed, redactDomains, names).text.slice(0, SIGNATURE_LIMIT)).replaceAll('`', "'");
   return [
     '```markdown',
     '**Error receipt**',

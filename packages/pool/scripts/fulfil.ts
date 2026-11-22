@@ -215,9 +215,11 @@ export interface Fulfilled {
   failed: number;
   left: number;
   gone: number;
+  /** Why the queue could not be read again, so fetches may still wait that this run never saw; the caller prints it (it may carry the token). */
+  stopped?: string;
 }
 
-type Verdict = keyof Fulfilled;
+type Verdict = Exclude<keyof Fulfilled, 'stopped'>;
 
 const FETCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -326,7 +328,8 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
       return await one(fetch);
     } catch (error) {
       // Only the queue recheck and the creation of the build folder reach here, and neither one holds the buyer key.
-      print(`Fetch ${fetch.fetchId}: ${messageOf(error)} It stays queued; run again.`);
+      const why = messageOf(error);
+      print(`Fetch ${fetch.fetchId}: ${why}${/[.!?]$/.test(why) ? '' : '.'} It stays queued; run again.`);
       return 'left';
     }
   };
@@ -334,7 +337,15 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
   // The queue is read in full, oldest first; a fetch this run already handled (and left queued) is not taken twice.
   const taken = new Set<string>();
   for (;;) {
-    const page = (await api.queued()).filter((fetch) => !taken.has(fetch.fetchId));
+    let page: QueuedFetch[];
+    try {
+      page = (await api.queued()).filter((fetch) => !taken.has(fetch.fetchId));
+    } catch (error) {
+      // The first read failing is the caller's (nothing was done yet); a re-read failing ends the run with its counts.
+      if (taken.size === 0) throw error;
+      // What was built stays built; the counts so far reach the operator, and the run ends failed so the next one reads the queue again.
+      return { ...done, stopped: messageOf(error) };
+    }
     if (page.length === 0) return done;
     for (const fetch of page) {
       taken.add(fetch.fetchId);
@@ -408,8 +419,9 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       vocabDir: io.vocabDir,
       now: io.now,
     });
+    if (done.stopped !== undefined) io.print(`The queue could not be read again (${done.stopped.replaceAll(token, '<token>')}), so the run stops here.`);
     io.print(`Fulfilled: ${String(done.built)} built, ${String(done.failed)} failed, ${String(done.left)} left queued, ${String(done.gone)} gone.`);
-    return done.failed + done.left === 0 ? 0 : 1;
+    return done.failed + done.left === 0 && done.stopped === undefined ? 0 : 1;
   } catch (error) {
     io.print(messageOf(error).replaceAll(token, '<token>'));
     return 1;

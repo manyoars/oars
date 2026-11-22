@@ -346,30 +346,81 @@ describe('the operator routes', () => {
     expect(Array.isArray(listed) ? listed.find((entry) => textOf(entry, 'fetchId') === fetchId) : undefined).toMatchObject({ lot: 'lot-a' });
   });
 
+  it('filter the queue by lot: only that lot\'s rows, and a lot with none answers an empty list', async () => {
+    const a = await queued();
+    const other = await buyer();
+    pool.stub.billing.credit(other.ref('lot-b'), 1);
+    const b = textOf((await start('price-b1', other.token)).json, 'fetchId');
+    const idsOf = async (query: string): Promise<unknown[]> => {
+      const listed = fieldOf((await operate('GET', `/v1/operator/fetches?${query}`)).json, 'fetches');
+      return Array.isArray(listed) ? listed.map((entry) => textOf(entry, 'fetchId')) : [];
+    };
+    const onlyB = await idsOf('lot=lot-b');
+    expect(onlyB).toContain(b);
+    expect(onlyB).not.toContain(a.fetchId);
+    expect(await idsOf('lot=lot-a')).toContain(a.fetchId);
+    expect(await idsOf('lot=lot-a')).not.toContain(b);
+    expect(await idsOf('lot=no-such-lot')).toEqual([]);
+  });
+
+  it('walk the queue by a small limit: every row exactly once, and no nextCursor on the last page', async () => {
+    const held = await buyer();
+    const db = await pool.db();
+    const ids = Array.from({ length: 5 }, (_, n) => `eeeeeeee-0000-4000-8000-${String(n).padStart(12, '0')}`);
+    try {
+      for (const id of ids) await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) VALUES (?, ?, 'price-a1', 'lot-walk', 'k', ?, 'test', 'queued', 5)").bind(id, held.account, BUYER_KEY).run();
+      const seen: string[] = [];
+      const cursors: boolean[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = (await operate('GET', `/v1/operator/fetches?lot=lot-walk&limit=2${cursor === undefined ? '' : `&cursor=${encodeURIComponent(cursor)}`}`)).json;
+        const fetches = fieldOf(page, 'fetches');
+        if (!Array.isArray(fetches)) throw new Error('no fetches');
+        seen.push(...fetches.map((entry) => textOf(entry, 'fetchId')));
+        const after = fieldOf(page, 'nextCursor');
+        cursors.push(typeof after === 'string');
+        cursor = typeof after === 'string' ? after : undefined;
+      } while (cursor !== undefined);
+      expect(seen).toEqual(ids);
+      expect(cursors).toEqual([true, true, false]);
+    } finally {
+      await db.prepare("DELETE FROM pack_fetches WHERE lot = 'lot-walk'").run();
+    }
+  });
+
+  it('refuse an empty lot and a limit that is not a whole number from 1 to 100 (400)', async () => {
+    for (const query of ['lot=', 'limit=0', 'limit=101', 'limit=1.5', 'limit=abc', 'limit=1e1', 'limit=0x10']) expect({ query, status: (await operate('GET', `/v1/operator/fetches?${query}`)).status }).toEqual({ query, status: 400 });
+  });
+
   it('page the queue by cursor: two pages of a 100-row limit, no fetch twice and none missed, with rows sharing one created_at', async () => {
     const held = await buyer();
     const db = await pool.db();
     const ids = Array.from({ length: 105 }, (_, n) => `ffffffff-0000-4000-8000-${String(n).padStart(12, '0')}`);
-    for (const id of ids) await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) VALUES (?, ?, 'price-a1', 'lot-a', 'k', ?, 'test', 'queued', 5)").bind(id, held.account, BUYER_KEY).run();
-    const everyQueued = (await db.prepare("SELECT fetch_id FROM pack_fetches WHERE state = 'queued' ORDER BY created_at, fetch_id").all()).results.map((row) => textOf(row, 'fetch_id'));
-    const seen: string[] = [];
-    const sizes: number[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = (await operate('GET', cursor === undefined ? '/v1/operator/fetches' : `/v1/operator/fetches?cursor=${encodeURIComponent(cursor)}`)).json;
-      const fetches = fieldOf(page, 'fetches');
-      if (!Array.isArray(fetches)) throw new Error('no fetches');
-      sizes.push(fetches.length);
-      seen.push(...fetches.map((entry) => textOf(entry, 'fetchId')));
-      const after = fieldOf(page, 'nextCursor');
-      cursor = typeof after === 'string' ? after : undefined;
-    } while (cursor !== undefined);
-    expect(sizes[0]).toBe(100);
-    expect(sizes.length).toBeGreaterThanOrEqual(2);
-    expect(new Set(seen).size).toBe(seen.length);
-    // Every queued row, in the order the pages are cut in: oldest first, then by fetch id.
-    expect(seen).toEqual(everyQueued);
-    for (const bad of ['not-a-cursor', btoa('no separator')]) expect({ bad, status: (await operate('GET', `/v1/operator/fetches?cursor=${bad}`)).status }).toEqual({ bad, status: 400 });
+    // The 105 rows would otherwise sit in the queue for every later test and a second run in the same process.
+    try {
+      for (const id of ids) await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) VALUES (?, ?, 'price-a1', 'lot-a', 'k', ?, 'test', 'queued', 5)").bind(id, held.account, BUYER_KEY).run();
+      const everyQueued = (await db.prepare("SELECT fetch_id FROM pack_fetches WHERE state = 'queued' ORDER BY created_at, fetch_id").all()).results.map((row) => textOf(row, 'fetch_id'));
+      const seen: string[] = [];
+      const sizes: number[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = (await operate('GET', cursor === undefined ? '/v1/operator/fetches' : `/v1/operator/fetches?cursor=${encodeURIComponent(cursor)}`)).json;
+        const fetches = fieldOf(page, 'fetches');
+        if (!Array.isArray(fetches)) throw new Error('no fetches');
+        sizes.push(fetches.length);
+        seen.push(...fetches.map((entry) => textOf(entry, 'fetchId')));
+        const after = fieldOf(page, 'nextCursor');
+        cursor = typeof after === 'string' ? after : undefined;
+      } while (cursor !== undefined);
+      expect(sizes[0]).toBe(100);
+      expect(sizes.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(seen).size).toBe(seen.length);
+      // Every queued row, in the order the pages are cut in: oldest first, then by fetch id.
+      expect(seen).toEqual(everyQueued);
+      for (const bad of ['not-a-cursor', btoa('no separator')]) expect({ bad, status: (await operate('GET', `/v1/operator/fetches?cursor=${bad}`)).status }).toEqual({ bad, status: 400 });
+    } finally {
+      await db.prepare("DELETE FROM pack_fetches WHERE fetch_id LIKE 'ffffffff-0000-4000-8000-%'").run();
+    }
   }, 60_000);
 
   it('answer no nextCursor when the queue fits one page', async () => {

@@ -11,7 +11,7 @@ import { bash, edit, fixture, id, removeFixtures, type Fixture } from './real-wo
 import { buildPack, keyIdOf, PackError } from './sample-pack.js';
 import { validate } from './validate-pack.js';
 
-// `rm` of node:fs/promises passes through unless a test sets `failRemoval`, which stands for a build folder Windows will not release (EBUSY).
+// `rm` of node:fs/promises passes through unless a test sets `removal.fail`, which stands for a build folder Windows will not release (EBUSY).
 const removal = vi.hoisted(() => ({ fail: false }));
 vi.mock('node:fs/promises', async (original) => {
   const real = await original<typeof fsPromises>();
@@ -62,6 +62,7 @@ interface Pool {
   breakOnce: { built?: boolean; failed?: boolean; remove?: boolean; put?: string;
     /** Fails the nth GET of the run (1 is the first queue read), once. */
     queueRead?: number;
+    queueRefused?: number;
   };
 }
 
@@ -82,6 +83,7 @@ const pool = (rows: Row[]): Pool => {
       world.calls.push(`${method} ${pathname}${search}`);
       if (new Headers(init.headers).get('authorization') !== `Bearer ${TOKEN}`) return Promise.resolve(json(401, { error: 'unauthorized' }));
       if (method === 'GET' && pathname === '/v1/operator/fetches') {
+        if (world.breakOnce.queueRefused === world.calls.filter((call) => call.startsWith('GET ')).length) return Promise.resolve(json(500, { error: 'internal' }));
         if (world.breakOnce.queueRead === world.calls.filter((call) => call.startsWith('GET ')).length) return Promise.reject(new Error('connection reset'));
         // The cursor is the last fetch id of the page before: the rows after it in order, still queued.
         const cursor = new URL(input).searchParams.get('cursor');
@@ -461,9 +463,30 @@ describe('fulfil', () => {
     expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1, gone: 0 });
     expect(stateOf(world, 1)).toBe('queued');
     expect(stateOf(world, 2)).toBe('built');
-    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: connection reset It stays queued; run again.`);
+    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: connection reset. It stays queued; run again.`);
     expect(readdirSync(b.work)).toEqual([]);
     expect(world.wrangled.filter((line) => line.startsWith('r2 object put'))).toHaveLength(1);
+  });
+
+  it('prints one stop, not two, when the pool refuses the queue recheck', async () => {
+    const b = await bench();
+    const world = pool([queued(1)]);
+    // GET 1 reads the queue; GET 2 is the fetch's recheck.
+    world.breakOnce.queueRefused = 2;
+    expect(await fulfil(b.options(world))).toEqual({ built: 0, failed: 0, left: 1, gone: 0 });
+    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: The pool refused the queue read: 500 internal. It stays queued; run again.`);
+  });
+
+  it('prints what failed, the counts so far, and exits 1 when the queue cannot be read again after a build', async () => {
+    const b = await bench();
+    const world = pool([queued(1)]);
+    // GET 1 reads the queue, GET 2 is the fetch's recheck, GET 3 is the re-read for more fetches.
+    world.breakOnce.queueRead = 3;
+    const io = { runtime: b.store.runtime, print: (text: string) => void b.log.push(text), wrangler: world.wrangler, env: { OARS_POOL_OPERATOR_TOKEN: TOKEN }, fetcher: world.fetcher };
+    expect(await main(['--lots', b.lots, '--terms', b.store.terms, '--owners', b.store.owners, '--index-key', b.indexKey, '--server', SERVER, '--work', b.work], io)).toBe(1);
+    expect(stateOf(world, 1)).toBe('built');
+    expect(b.log.at(-2)).toBe('The queue could not be read again (connection reset), so the run stops here.');
+    expect(b.log.at(-1)).toBe('Fulfilled: 1 built, 0 failed, 0 left queued, 0 gone.');
   });
 
   it('leaves each fetch queued, and does not end the run, when no build folder can be made', async () => {

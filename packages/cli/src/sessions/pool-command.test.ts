@@ -1287,6 +1287,23 @@ ${user('and goes on', stamp(agentHours))}
       expect(outboxFiles(scene)).toHaveLength(1);
     });
 
+    it('builds each batch on the root and leaf count its transcript\'s skeleton file holds, the main\'s and the subagent\'s', async () => {
+      const { scene } = await quiet(7, 7);
+      const folder = join(scene.staged.storeDir, 'skeletons');
+      const held = new Map(readdirSync(folder).map((name) => {
+        const skeleton: unknown = JSON.parse(readFileSync(join(folder, name), 'utf8'));
+        const merkleRoot: unknown = Reflect.get(Object(skeleton), 'merkleRoot');
+        const leaves: unknown = Reflect.get(Object(skeleton), 'leaves');
+        if (typeof merkleRoot !== 'string' || typeof leaves !== 'number') throw new Error(`${name} is not a skeleton`);
+        return [name.slice(0, -'.json'.length), { merkleRoot, leaves }] as const;
+      }));
+      expect(held.size).toBe(2);
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1 });
+      const used = vi.mocked(skeletonOf).mock.calls.flatMap(([records]) => records.transcripts.map(({ session, root }) => [session.session, root] as const));
+      expect(new Map(used)).toEqual(held);
+    });
+
     it('counts a captured subagent that has no root as not built', async () => {
       const { scene } = await quiet(7, 7);
       const folder = join(scene.staged.storeDir, 'skeletons');

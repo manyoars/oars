@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, LOAD_RUN, scanLog, depositSession, derive, loadRuns, loadStore, logStart, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, runOrder, slugOf, withLock, type StoreRun } from './store.js';
+import { compactLog, deposit, LOAD_RUN, scanLog, depositSession, derive, loadRuns, loadStore, logStart, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, readTranscriptRoots, runOrder, slugOf, withLock, type StoreRun } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -344,6 +344,23 @@ describe('deposit', () => {
       expect(groups.flatMap((group) => group.skeletons)).toEqual(whole.skeletons);
       expect(groups.reduce((sum, group) => sum + group.unreadable, 0)).toBe(whole.unreadable);
     }
+  });
+
+  it('reads each session\'s transcript root alone, and the same roots a map built from readSkeletons holds', async () => {
+    const staged = stage();
+    const folder = paths(staged.storeDir).skeletons;
+    // No skeletons folder: no roots.
+    expect(await readTranscriptRoots(staged.storeDir)).toEqual(new Map());
+    mkdirSync(folder, { recursive: true });
+    for (const [at, session] of ['main', 'main~agent-a'].entries()) {
+      writeFileSync(join(folder, `${session}.json`), JSON.stringify({ v: '2', session, project: 'p', merkleRoot: `root-${String(at)}`, leaves: at + 3, lines: [{ hashes: ['h'.repeat(64)] }] }));
+    }
+    writeFileSync(join(folder, 'torn.json'), '{"lines": [');
+    writeFileSync(join(folder, 'other.json'), JSON.stringify({ not: 'a skeleton' }));
+    const roots = await readTranscriptRoots(staged.storeDir);
+    const old = new Map((await readSkeletons(staged.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+    expect(roots).toEqual(old);
+    expect([...roots]).toEqual([['main', { merkleRoot: 'root-0', leaves: 3 }], ['main~agent-a', { merkleRoot: 'root-1', leaves: 4 }]]);
   });
 
   it('groups skeleton files by file name: a main with its subagents, an agent whose main is gone, and a torn file by itself', async () => {

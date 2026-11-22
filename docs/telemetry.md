@@ -87,6 +87,19 @@ The event carries no answer, term, path, version, hash, or account: not the regi
 {"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-13T14:05:10.250Z","type":"join-step","cli":"0.5.5","os":"linux","data":{"step":"covenant","state":"stopped"}}
 ```
 
+### `recall-write`
+
+One per `oars sessions recall --context --write` that wrote a file. A `--dry-run`, a run whose lines were already on disk, and a refusal leave none. Counts only: no line, no file name, no path, and no repository.
+
+| Field | What it holds |
+|---|---|
+| `created` | `1` when the run made the file, `0` when it updated one that was there (a whole number, as the other yes-or-no fields are: `readFailed`, `failed`). |
+| `lines` | How many recall lines the block holds after the run (the header, the day line, and the two markers are not counted). |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-21T14:05:10.250Z","type":"recall-write","cli":"0.5.5","os":"linux","data":{"created":1,"lines":5}}
+```
+
 ### `hook`
 
 One per fire of a hook: the bare `oars gate hook` (recorded by its own process, written after its answer is printed), and the five hooks `hook-bin.js` runs. A hook's stdout and exit code are the same with telemetry on, off, or unwritable.

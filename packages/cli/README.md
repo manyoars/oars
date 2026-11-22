@@ -218,6 +218,16 @@ GitHub Copilot gets the same recall from the plugin's `com.github.copilot/hooks/
 
 There is no `PreToolUse` entry for Copilot, because it drops that event's output. The harness version comes from the session's `session-state/<id>/events.jsonl` (`session.start`); with none, the recall is read across the harness's versions.
 
+**Recall for agents with no hook: `--context --write`.** `oars sessions recall --context --write [file]` writes the same `--context` block into an instruction file, between `<!-- oars recall: begin (...) -->` and `<!-- oars recall: end -->`, so any agent that reads that file sees the repository's recurring errors with oars not installed (a teammate's agent, another harness, a cloud sandbox with an empty store). With no file it takes the git top level of `--cwd` (outside a git repository it refuses and writes nothing) and picks, in this order: the one of `AGENTS.md` and `CLAUDE.md` that already holds the markers (both hold them: it refuses and names both); `CLAUDE.md` when it exists and `AGENTS.md` does not; otherwise `AGENTS.md`, made if missing. When both files exist and the write goes to `AGENTS.md`, it prints one line saying Claude Code reads `AGENTS.md` only if `CLAUDE.md` imports it ([Claude Code memory docs](https://code.claude.com/docs/en/memory), read 2026-11-21). Name another file to write that one, relative to `--cwd`: `--write CLAUDE.md`.
+
+Only the text between the markers is replaced, every other byte of the file stays as it was (line endings included), and with no markers the block is appended. One marker alone, or more than one pair, is refused and changes nothing. A run whose lines already match the block on disk writes nothing and says so; the block names the day its lines last changed. Each line passes the redaction `--receipt` applies (including the branch and project names your record holds and any `mcp__` tool the tables do not list) and your exclusion terms file (`OARS_EXCLUSION_TERMS`); a line that trips either, or holds a link, is dropped whole, never masked, and the command prints how many. The block holds no install, star, or recommend text: the begin marker names `manyoars.com` as provenance and nothing else does. `--dry-run` prints the block and the file and writes nothing; a real write prints both and leaves the commit to you, since oars never runs git. It leaves one `recall-write` telemetry event (`created`, `lines`; `docs/telemetry.md`).
+
+```bash
+oars sessions recall --context --write --dry-run   # the block and the file it would go to
+oars sessions recall --context --write             # write it, then review and commit the file
+oars sessions recall --context --write CLAUDE.md   # name the file yourself
+```
+
 Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered. The pre-filter is a `read`, a `case`, and a `printf | node` in the shell the harness runs hooks in (Git Bash on Windows), so it needs no `findstr` and no extra dependency. Writers of the store (`SessionEnd`, the sweep, `deposit`) take `store.lock`, so parallel sessions cannot lose each other's `state.json` entries; a lock older than ten minutes is broken.
 
 ```bash

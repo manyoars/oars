@@ -61,7 +61,7 @@ const readCursor = (cursor: string): { createdAt: number; fetchId: string } | un
   }
 };
 
-/** `GET /v1/operator/fetches?state=&cursor=`: the fetches in a state (`queued` unless asked), oldest first, `QUEUE_PAGE` at a time. `nextCursor` is present while more rows remain; pass it back as `cursor` for the next page. A queued row carries the buyer key the builder builds under; no other state holds one. */
+/** `GET /v1/operator/fetches?state=&lot=&limit=&cursor=`: the fetches in a state (`queued` unless asked), of one lot when `lot` is given, oldest first, `limit` (up to `QUEUE_PAGE`, which is the default) at a time. `nextCursor` is present while more rows remain; pass it back as `cursor` for the next page. A queued row carries the buyer key the builder builds under; no other state holds one. */
 export const listFetches = async (request: Request, env: OperatorBindings): Promise<Response> => {
   const refused = await notOperator(request, env);
   if (refused !== undefined) return refused;
@@ -71,16 +71,21 @@ export const listFetches = async (request: Request, env: OperatorBindings): Prom
   const given = params.get('cursor');
   const after = given === null ? undefined : readCursor(given);
   if (given !== null && after === undefined) return refuse(400, 'missing_field', 'cursor is the nextCursor an earlier listing answered.', 'cursor');
+  const lot = params.get('lot');
+  if (lot === '') return refuse(400, 'missing_field', 'lot is the id of a lot, or absent for every lot.', 'lot');
+  const asked = params.get('limit');
+  // Plain digits only: `Number` would also take ` 5`, `1e1`, and `0x10`.
+  const size = asked === null ? QUEUE_PAGE : /^[1-9][0-9]{0,2}$/.test(asked) ? Number(asked) : 0;
+  if (size < 1 || size > QUEUE_PAGE) return refuse(400, 'missing_field', `limit is a whole number from 1 to ${String(QUEUE_PAGE)}.`, 'limit');
   const columns = 'fetch_id, price_ref, lot, buyer_key_id, buyer_key, mode, state, object_key, created_at, ready_at, expires_at';
   // One row more than a page tells whether another page follows.
-  const { results } =
-    after === undefined
-      ? await env.DB.prepare(`SELECT ${columns} FROM pack_fetches WHERE state = ? ORDER BY created_at, fetch_id LIMIT ?`).bind(state, QUEUE_PAGE + 1).all()
-      : await env.DB.prepare(`SELECT ${columns} FROM pack_fetches WHERE state = ? AND (created_at > ? OR (created_at = ? AND fetch_id > ?)) ORDER BY created_at, fetch_id LIMIT ?`).bind(state, after.createdAt, after.createdAt, after.fetchId, QUEUE_PAGE + 1).all();
-  const page = results.slice(0, QUEUE_PAGE);
+  const where = ['state = ?', ...(lot === null ? [] : ['lot = ?']), ...(after === undefined ? [] : ['(created_at > ? OR (created_at = ? AND fetch_id > ?))'])];
+  const values = [state, ...(lot === null ? [] : [lot]), ...(after === undefined ? [] : [after.createdAt, after.createdAt, after.fetchId])];
+  const { results } = await env.DB.prepare(`SELECT ${columns} FROM pack_fetches WHERE ${where.join(' AND ')} ORDER BY created_at, fetch_id LIMIT ?`).bind(...values, size + 1).all();
+  const page = results.slice(0, size);
   const last = page.at(-1);
   const [lastAt, lastId] = [fieldOf(last, 'created_at'), fieldOf(last, 'fetch_id')];
-  const more = results.length > QUEUE_PAGE && typeof lastAt === 'number' && typeof lastId === 'string';
+  const more = results.length > size && typeof lastAt === 'number' && typeof lastId === 'string';
   return answer(200, {
     fetches: page.map((row) => ({
       fetchId: fieldOf(row, 'fetch_id'),
