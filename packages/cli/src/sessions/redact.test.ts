@@ -46,6 +46,10 @@ describe('the email mask and a non-ASCII or bracketed address', () => {
     expect(mask('mail someone@[IPv6:2001:db8::1] now')).toBe('mail <email> now');
   });
 
+  it('leaves a bracketed host that is no IP literal alone', () => {
+    expect(mask('see x@[dead] now')).toBe('see x@[dead] now');
+  });
+
   it('masks a non-ASCII local part whole', () => {
     expect(mask('mail jöhn@example.com now')).toBe('mail <email> now');
   });
