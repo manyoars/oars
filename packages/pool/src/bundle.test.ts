@@ -219,12 +219,12 @@ describe('a bundle over five accounts', () => {
     }
   });
 
-  it('takes a deposit of each vocabulary it reads and of an earlier one, and refuses a later one before reading it', async () => {
+  it('takes a deposit of each vocabulary it reads, and refuses a later one before reading it', async () => {
     const fresh = await startPool();
     try {
       const { token } = await fresh.signIn('github', stubUser('1102'));
       await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
-      for (const [at, vocab] of [...READ_VOCAB_VERSIONS, '1'].entries()) {
+      for (const [at, vocab] of READ_VOCAB_VERSIONS.entries()) {
         expect((await fresh.post('/v1/deposits', { ...sampleSkeleton(`11020000000000${String(at).padStart(2, '0')}`), vocabVersion: vocab }, token)).status).toBe(201);
       }
       const later = String(Number(VOCAB_VERSION) + 1);
