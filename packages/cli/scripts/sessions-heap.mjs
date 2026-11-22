@@ -485,7 +485,11 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
     const reset = () => {
       for (const name of readdirSync(dirs.store)) if (!before.has(name)) rmSync(join(dirs.store, name), { recursive: true, force: true });
     };
-    /** One run of the build; true when it finished and batched every session. */
+    /**
+     * One run of the build; `ok` when it finished and batched every session.
+     * @param {number} heapMb
+     * @param {boolean} withPreload
+     */
     const attempt = (heapMb, withPreload) => {
       reset();
       const ran = runCli(dirs, heapMb, poolArgs, withPreload ? preload : undefined, false, machine);
