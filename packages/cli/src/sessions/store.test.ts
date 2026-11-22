@@ -357,10 +357,12 @@ describe('deposit', () => {
     }
     writeFileSync(join(folder, 'torn.json'), '{"lines": [');
     writeFileSync(join(folder, 'other.json'), JSON.stringify({ not: 'a skeleton' }));
+    // A session named by two files: the last file in name order (`z.json`) wins, and the session keeps its first place in the map.
+    writeFileSync(join(folder, 'z.json'), JSON.stringify({ v: '2', session: 'main', project: 'p', merkleRoot: 'root-z', leaves: 9, lines: [{ hashes: ['h'.repeat(64)] }] }));
     const roots = await readTranscriptRoots(staged.storeDir);
     const old = new Map((await readSkeletons(staged.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
     expect(roots).toEqual(old);
-    expect([...roots]).toEqual([['main', { merkleRoot: 'root-0', leaves: 3 }], ['main~agent-a', { merkleRoot: 'root-1', leaves: 4 }]]);
+    expect([...roots]).toEqual([['main', { merkleRoot: 'root-z', leaves: 9 }], ['main~agent-a', { merkleRoot: 'root-1', leaves: 4 }]]);
   });
 
   it('groups skeleton files by file name: a main with its subagents, an agent whose main is gone, and a torn file by itself', async () => {

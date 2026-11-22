@@ -2102,14 +2102,16 @@ export const readSkeletons = async (storeDir: string, only?: string, lean = fals
   return readSkeletonFiles(folder, names, lean);
 };
 
+export type TranscriptRoot = { merkleRoot: string; leaves: number };
+
 /**
  * Each session's transcript root, read one skeleton file at a time: only `merkleRoot` and `leaves` of a file are kept, so no parsed skeleton outlives its own read. A skeleton is most of a
- * store's bytes (the operator's: 12,637 files, 1.6 GB), and `readSkeletons` holds every one of them for the build that needs three fields of each. A file that cannot be read is skipped, as
+ * store's bytes (the operator's: 12,637 files, 1.6 GB), and `readSkeletons` would hold every one of them, which the pool deposit build did before it read three fields of each here. A file that cannot be read is skipped, as
  * `readSkeletons` counts it unreadable; a session named twice keeps its last file in name order, as a `Map` built from `readSkeletons` does.
  */
-export const readTranscriptRoots = async (storeDir: string): Promise<Map<string, { merkleRoot: string; leaves: number }>> => {
+export const readTranscriptRoots = async (storeDir: string): Promise<Map<string, TranscriptRoot>> => {
   const folder = paths(storeDir).skeletons;
-  const roots = new Map<string, { merkleRoot: string; leaves: number }>();
+  const roots = new Map<string, TranscriptRoot>();
   for (const name of await skeletonNames(folder)) {
     const skeleton = await parseSkeletonFile(folder, name);
     if (skeleton !== null) roots.set(skeleton.session, { merkleRoot: skeleton.merkleRoot, leaves: skeleton.leaves });
