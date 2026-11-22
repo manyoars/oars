@@ -296,7 +296,7 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     const counts = await run(f);
     expect(counts).toMatchObject({ lead: 2, emitted: 3 });
     const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
-    expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '5' });
+    expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '6' });
     expect(packText(f.out)).not.toContain('leading');
   });
 

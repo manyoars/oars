@@ -13,7 +13,7 @@ tags:
 3 coding-agent session skeletons, published by Many Oars Co., each a record of the session's steps, errors, what followed each failed call, and human interventions. No transcript text is in this release, and every session ended at least 30 days before it was built (2026-11-13).
 
 - License and rights: https://manyoars.com/packs#rights.
-- Redaction version: 5; model reasoning: kept. Redaction is best effort.
+- Redaction version: 6; model reasoning: kept. Redaction is best effort.
 - Layout: \`manifest.jsonl\` (one row per session, \`transcripts: 0\`), \`sessions/<match id>/skeleton.json\`, \`census.json\` (counts only), and \`pack.json\` (how it was built).
 - Check it: \`npm run validate-pack -w packages/pool -- <this folder>\` in the Many Oars repository (spec: \`docs/session-record.md\`). It needs no key, account, or network.
 - Fresher sessions, whole transcripts, and rights for use: https://manyoars.com/packs.
