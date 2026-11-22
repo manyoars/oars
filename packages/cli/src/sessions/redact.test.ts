@@ -54,6 +54,10 @@ describe('the email mask and a non-ASCII or bracketed address', () => {
     expect(mask('mail jöhn@example.com now')).toBe('mail <email> now');
   });
 
+  it('masks letters that touch an address with no space, with the address', () => {
+    expect(mask('連絡先はsomeone@example.com')).toBe('<email>');
+  });
+
   it('leaves a dotless host alone, as in a git remote or ssh target', () => {
     expect(mask('ssh deploy@localhost')).toBe('ssh deploy@localhost');
   });

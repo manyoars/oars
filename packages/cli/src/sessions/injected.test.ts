@@ -376,6 +376,13 @@ describe('the userEmail block of an opening context', () => {
     expect(deposit(result)).toContain(`[injected system-reminder ${hashOf(block)}]`);
   });
 
+  it('leaves a reminder in the middle of a typed prompt to the email mask, which masks the address', () => {
+    const out = deposit({ type: 'user', message: { role: 'user', content: `I pasted this: ${reminder(context)}` } });
+    expect(out).not.toContain(ADDRESS);
+    expect(out).toContain('<email>');
+    expect(out).not.toContain('[injected system-reminder');
+  });
+
   it('is hashed when a request blob repeats it as text of the meta message', () => {
     const block = reminder(context);
     const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: block }] } };
