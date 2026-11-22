@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ACTION_TABLES, actionOf, HOOK_TOOLS } from './actions.js';
 import { denialOf, slugOf } from './allow.js';
-import { codexDialect, dialectOf, harnessFlag } from './hook-dialect.js';
+import { CLAUDE_DIALECT, codexDialect, dialectOf, harnessFlag } from './hook-dialect.js';
 import { indexPath, readIndex, type HookIndex } from './hook-index.js';
 import { HOOK_EVENTS, runHook } from './hooks.js';
 import { armOf, readRecalls } from './recall-object.js';
@@ -213,6 +213,13 @@ describe('the failure Codex does not state', () => {
     expect(String(specific((await failing((id) => [output(id, 'Exit code: 1\nWall time: 1 seconds\nOutput:\nboom')])).reply).additionalContext)).toContain('file.read x12');
   });
 
+  it('answers nothing for a failed call whose output line is longer than the 64 KB tail (documented in harness-install.md): the line is cut at its start and cannot be read', async () => {
+    const long = `Process exited with code 1\nOutput:\n${'x'.repeat(70_000)}`;
+    expect((await failing((id) => [output(id, long)])).reply).toBeUndefined();
+    // The same call with a line inside the tail is answered, so the silence above is the size and nothing else.
+    expect(String(specific((await failing((id) => [output(id, `Process exited with code 1\nOutput:\n${'x'.repeat(1000)}`)])).reply).additionalContext)).toContain('file.read x12');
+  });
+
   it('answers nothing for a command that exited 0, and a call that is still running', async () => {
     expect((await failing((id) => [output(id, 'Process exited with code 0\nWall time: 0.1 seconds\nOutput:\nok')])).reply).toBeUndefined();
     expect((await failing((id) => [output(id, 'Wall time: 1 seconds\nProcess running with session ID 7\nOutput:\n')])).reply).toBeUndefined();
@@ -277,5 +284,24 @@ describe('the exit line of a finished command', () => {
     expect(await callFailureOf(file, 'a')).toBe('Exit code 1\nfatal: not a git repository');
     expect(await callFailureOf(undefined, 'a')).toBeUndefined();
     expect(await callFailureOf(file, undefined)).toBeUndefined();
+  });
+});
+
+describe('the version a hook-call event states', () => {
+  // A Codex rollout is not a Claude Code transcript: a line shaped like Claude's (`version`, `message.model`) in its tail must not become the event's harness version or model.
+  const stated = async (dialect: typeof codex): Promise<object | undefined> => {
+    const made = await staged();
+    const file = rolloutFile(made, [JSON.stringify({ type: 'assistant', version: '9.9.9', message: { model: 'claude-opus-4-5' } })]);
+    const events: object[] = [];
+    await runHook('post-tool', JSON.stringify({ session_id: sessionOn(made, 'shown', KEY), tool_name: 'Bash', tool_use_id: 'c', tool_response: 'x', transcript_path: file }), made.runtime, () => NOW, undefined, (type, fields) => {
+      if (type === 'hook') events.push(fields);
+    }, dialect);
+    return events[0];
+  };
+
+  it('takes nothing from a Claude-shaped line in a Codex rollout, and does take it under the Claude layout', async () => {
+    expect(await stated(codex)).not.toHaveProperty('harnessVersion');
+    expect(await stated(codex)).not.toHaveProperty('model');
+    expect(await stated(CLAUDE_DIALECT)).toMatchObject({ harnessVersion: '9.9.9', model: 'claude-opus-4-5' });
   });
 });

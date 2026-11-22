@@ -84,6 +84,14 @@ describe.each(installed)('the manifest powershell command under %s', (shell) => 
     expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
   });
 
+  // Windows PowerShell 5.1 ships with the Restricted policy, which refuses the `.ps1` shim. Copilot logs a hook that exits with anything but 0 or 2 and carries on (hooks reference, "Exit codes for command hooks"),
+  // and this manifest registers no preToolUse hook, so the hook fails open: no recall, no block. Exit 2 would be read as additionalContext on PostToolUseFailure, so the code must not be 2.
+  it.runIf(shell === 'powershell' && process.platform === 'win32')('fails open when the execution policy refuses the oars-hook.ps1 shim: exit 1, nothing on stdout, never exit 2', async () => {
+    const { stdout, code } = await runPowershell(shell, powershellOf('PostToolUseFailure'), Buffer.from('{}', 'utf8'), stubFolder('npm'), 'Restricted');
+    expect(code).toBe(1);
+    expect(stdout.length).toBe(0);
+  });
+
   it('does nothing and prints nothing when oars-hook is not on the PATH', async () => {
     // Only where the machine itself has no oars-hook: a developer machine with the real one installed cannot show the guard.
     if (!probe(shell, 'if (Get-Command oars-hook -ErrorAction SilentlyContinue) { exit 1 }')) return;

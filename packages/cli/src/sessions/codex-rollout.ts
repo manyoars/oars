@@ -7,9 +7,10 @@ type Obj = { [key: string]: unknown };
 const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 
-// The two spellings of a finished command's exit line, as codex.ts reads them from the same header; the header ends at the `Output:` line.
-const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
-const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
+// The two spellings of a finished command's exit line, and the line the header ends at. This is the one definition: codex.ts (the reader) and codex-hook.ts (the recorder) import it, so a call is
+// a failure to the recorder exactly when it is one to the push. It lives here because this file is light enough for the hook bin to load.
+export const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
+export const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
 
 /** A `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (the same two forms codex.ts reads). */
 const bodyOf = (raw: unknown): string => {

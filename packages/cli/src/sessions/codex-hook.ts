@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { ACTION_TABLES, actionOf, HOOK_TOOLS, type CanonicalAction } from './actions.js';
 import { compileAllow, isDenial, slugOf } from './allow.js';
 import { argClassOf, type ArgClass } from './call-shape.js';
+import { EXIT_LINE, OUTPUT_MARK } from './codex-rollout.js';
 import { appendHookCall } from './hook-calls.js';
 import { mkdirOwnerOnly } from './owner-only.js';
 import { makeRepoRoot } from './repo-root.js';
@@ -74,12 +75,6 @@ const modelOf = (value: unknown): string | null => {
   const name = str(value);
   return name === null ? null : MODEL_NAME.test(name) && !PATH_SHAPED.test(name) ? name : 'other';
 };
-
-// The three spellings Codex gives a finished command's outcome (`Exit code: N`, `Process exited with code N`, `exit code N`), at the start of a line.
-const EXIT_LINE = /^[ \t]*(?:exit code:?[ \t]*|process exited with code[ \t]+)(-?\d+)[ \t]*$/im;
-
-// The line a command's output begins after: the header above it is Codex's, the text below is whatever the command printed.
-const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
 
 /** `unknown` unless the header Codex writes before the `Output:` line carries an exit line: the command's own text decides nothing, and a response with no such header says nothing. */
 export const errorFlagOf = (response: unknown): ErrorFlag => {
