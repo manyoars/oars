@@ -7,6 +7,8 @@
 // casing would read the same payload two ways; the manifest that registers the command is the one place that knows which harness will run it.
 import { open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { HOOK_TOOLS, type CanonicalAction } from './actions.js';
+import { callFailureOf } from './codex-rollout.js';
 import { ARCHIVE, copilotRoot, SAFE_ID } from './copilot.js';
 import type { Harness } from './schema.js';
 
@@ -26,6 +28,14 @@ export interface Dialect {
   version?: (sessionId: string) => Promise<string | null>;
   /** Whether this harness hands its hooks Claude Code's layout: a `transcript_path` whose tail states the version and model, the `.claude` census, and a `PreToolUse` whose output reaches the model. */
   claudeLayout: boolean;
+  /** Whether this harness's `PreToolUse` output reaches the model, so the fit push is worth asking. Claude Code and Codex do; Copilot's has no context field. */
+  pushesPreTool: boolean;
+  /** Names the hook payload gives a tool that the harness's action table does not list, with the action each is. */
+  aliases?: ReadonlyMap<string, CanonicalAction>;
+  /** The failure text of a finished tool call whose payload carries none (Codex's `tool_response` has no exit code), or undefined when the call did not fail or this cannot tell. */
+  failure?: (input: Input) => Promise<string | undefined>;
+  /** What this harness's own recording hook does with the same payload, run beside the recall so one entry per event both records and pushes. It never throws. */
+  record?: (stdin: string, storeDir: string, now: () => number) => Promise<void>;
 }
 
 /** Claude Code's reply: `hookSpecificOutput`, named for the event that fired. */
@@ -37,6 +47,7 @@ export const CLAUDE_DIALECT: Dialect = {
   // A failed tool call names the event the harness fired (PostToolUse and PostToolUseFailure both reach this handler); every other event is named by the hook that answers it.
   answer: (event, context, payload) => `${JSON.stringify({ hookSpecificOutput: { hookEventName: event === 'post-tool' ? str(payload.hook_event_name) ?? 'PostToolUseFailure' : CLAUDE_EVENTS[event] ?? event, additionalContext: context } })}\n`,
   claudeLayout: true,
+  pushesPreTool: true,
 };
 
 /** Copilot's camelCase payload names beside the snake_case ones its PascalCase registrations get: the same field, either spelling. */
@@ -137,11 +148,40 @@ export const copilotDialect = (env: { [name: string]: string | undefined }, home
   answer: copilotAnswer,
   version: (sessionId) => copilotVersionOf(copilotRoot(env, home), sessionId),
   claudeLayout: false,
+  pushesPreTool: false,
+});
+
+/** Codex's reply is Claude Code's `hookSpecificOutput` (the same output schema), except that a tool call's `PostToolUse` is the one event Codex fires for success and failure alike. */
+const codexAnswer = (event: string, context: string): string => `${JSON.stringify({ hookSpecificOutput: { hookEventName: event === 'post-tool' ? 'PostToolUse' : (CLAUDE_EVENTS[event] ?? event), additionalContext: context } })}\n`;
+
+/** A Codex hook payload has Claude Code's keys, but `transcript_path` is a rollout (never a Claude transcript), and the call id is `tool_use_id`. */
+const codexFailure = async (input: Input): Promise<string | undefined> => {
+  const tool = str(input.tool_name);
+  // Only a shell call has an exit line, so any other call is not worth reading the rollout for.
+  if (tool === undefined || HOOK_TOOLS.get(tool) !== 'shell.exec') return undefined;
+  return callFailureOf(str(input.transcript_path), str(input.tool_use_id));
+};
+
+export const codexDialect = (home: string): Dialect => ({
+  harness: 'codex',
+  readPayload: (payload) => payload,
+  answer: (event, context) => codexAnswer(event, context),
+  claudeLayout: false,
+  pushesPreTool: true,
+  aliases: HOOK_TOOLS,
+  failure: codexFailure,
+  // Loaded here so the Claude Code and Copilot hooks never pay for the recording modules.
+  record: async (stdin, storeDir, now) => {
+    const { runCodexHook } = await import('./codex-hook.js');
+    const { appendOwnerOnly } = await import('./owner-only.js');
+    await runCodexHook(stdin, { storeDir, home, now, append: appendOwnerOnly });
+  },
 });
 
 /** The dialect a `--harness` name asks for; undefined for a name this program has no dialect for, which the entry answers with silence. */
 export const dialectOf = (name: string | undefined, env: { [name: string]: string | undefined }, home: string): Dialect | undefined => {
   if (name === undefined || name === 'claude-code') return CLAUDE_DIALECT;
+  if (name === 'codex') return codexDialect(home);
   return name === 'copilot' ? copilotDialect(env, home) : undefined;
 };
 

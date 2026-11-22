@@ -1,5 +1,6 @@
 // The pool server: a Workers fetch handler over one D1 database. A deposit is a skeleton of a closed list of fields, whose names the pool classes (`field-classes.ts`); a shape error is refused, naming the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { isVocabAhead, READ_VOCAB_VERSIONS } from '../../cli/src/sessions/public-vocabulary.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { consentTexts, createClub, joinClub, leaveClub, viewBoard, viewClub } from './clubs.js';
@@ -62,6 +63,9 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   if (taken instanceof Response) return taken;
   const { claim } = taken;
   body = taken.rest;
+  // A batch built under a later vocabulary than this pool's is refused before it is read: read with this pool's older lists, its names would be taken for ones they are not. Its client keeps it in the outbox and sends it once the pool is updated.
+  const sentVocab: unknown = typeof body === 'object' && body !== null ? Reflect.get(body, 'vocabVersion') : undefined;
+  if (typeof sentVocab === 'string' && isVocabAhead(sentVocab)) return refuse(409, 'vocabulary_ahead', `This pool reads vocabulary version ${READ_VOCAB_VERSIONS.join(' or ')}, not the later ${sentVocab}. Send the batch again once the pool is updated.`, 'vocabVersion');
   // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
   const sent = parseSkeleton(body);
   if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);

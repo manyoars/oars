@@ -154,7 +154,8 @@ describe('the error flag', () => {
     expect(errorFlagOf('Exit code: 0\nOutput:\nok')).toBe('no');
     expect(errorFlagOf('Exit code: 3\nOutput:\nboom')).toBe('yes');
     expect(errorFlagOf('Process exited with code 1\nOutput:\n')).toBe('yes');
-    expect(errorFlagOf('exit code -1\nOutput:\n')).toBe('yes');
+    // One set of spellings with the reader (codex-rollout.ts): `exit code N` is not one Codex writes, so it says nothing.
+    expect(errorFlagOf('exit code -1\nOutput:\n')).toBe('unknown');
     expect(errorFlagOf('Wall time 1 seconds\nOutput:\nthe exit code 3 was expected')).toBe('unknown');
     expect(errorFlagOf('no header here')).toBe('unknown');
     expect(errorFlagOf('Process exited with code 1')).toBe('unknown');

@@ -28,6 +28,8 @@ export interface PushInput {
   /** The call's input key names, never their values. */
   keys: readonly string[];
   transcript: string | undefined;
+  /** The harness and its version, for a harness whose transcript has no tail that states them (Codex): the frame is then named, not read. */
+  named?: { harness: Harness; harnessVersion: string | null };
   platform: string;
   at: string;
   index: HookIndex;
@@ -43,7 +45,7 @@ export const pushRecall = async (input: PushInput): Promise<Recall | undefined> 
   if (read === undefined) return undefined;
   const earlier = parseRecalls(await tailOf(recallsPath(input.storeDir)));
   if (earlier.some((recall) => recall.mode === 'push' && recall.sid === input.sid && recall.query.prefix?.[0] === shape)) return undefined;
-  const frame = frameOfTail(input.transcript === undefined ? '' : await tailOf(input.transcript), input.platform, input.at);
+  const frame = frameOfTail(input.transcript === undefined ? '' : await tailOf(input.transcript), input.platform, input.at, input.named);
   const { rendered, names } = renderAnswer([read], frame);
   const recall = makeRecall({
     sid: input.sid,

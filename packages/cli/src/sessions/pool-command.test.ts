@@ -1630,6 +1630,20 @@ describe('oars pool deposit --send', () => {
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ exitCode: ExitCode.AUTH });
   });
 
+  it('holds a batch in the outbox and says the pool is behind when the pool reads an older vocabulary, then sends it once the pool is updated', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const behind = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(409, { error: 'vocabulary_ahead', message: 'This pool reads vocabulary version 1.', field: 'vocabVersion' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, behind.via))).rejects.toMatchObject({
+      exitCode: ExitCode.CONFLICT,
+      problem: { code: 'vocabulary_ahead', status: 409, title: `This pool has not been updated to vocabulary ${VOCAB_VERSION} yet, so the batch was not sent. It stays in the outbox: send it again once the pool is updated.` },
+    });
+    expect(behind.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    expect([...(await sentHashes(outboxFolder(scene.staged.storeDir, POOL)))]).not.toContain(hash);
+    const updated = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    expect((await poolDeposit(scene.h.deps, sendOptions(hash, updated.via))).document).toMatchObject({ ok: true, sent: true, hash });
+  });
+
   it('stops before the request when the pool is closed, and when the covenant is not accepted', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);

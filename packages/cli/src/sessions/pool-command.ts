@@ -599,6 +599,13 @@ export const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
   return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
 };
 
+/** The pool's answer to a batch built under a later vocabulary than it reads: nothing was sent, so the batch stays in the outbox, and the person is told it waits for the pool rather than shown the refusal alone. */
+export const vocabularyAhead = ({ status, body }: Reply): CliError | undefined => {
+  if (status !== 409 || !isObject(body) || textIn(body, 'error') !== 'vocabulary_ahead') return undefined;
+  const title = `This pool has not been updated to vocabulary ${VOCAB_VERSION} yet, so the batch was not sent. It stays in the outbox: send it again once the pool is updated.`;
+  return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_ahead', title, status: 409 });
+};
+
 const lockMessages: { [code in LockRefusal]: string } = {
   batch_unknown: 'No batch with that hash is in the outbox. Run oars pool outbox to list them.',
   batch_not_shown: 'That batch was never printed. Run oars pool outbox, read it, then send it.',
@@ -625,7 +632,7 @@ export const postBatch = async (deps: RunDeps, options: { server: string; token:
     // One send event per batch, on the reply that ends it, whatever number of parts it took.
     if (ended) recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
     if (reply.status === 201) break;
-    if (ended) throw refusal(DEPOSIT, reply);
+    if (ended) throw vocabularyAhead(reply) ?? refusal(DEPOSIT, reply);
   }
   emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
 };

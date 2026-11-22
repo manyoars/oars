@@ -6,6 +6,7 @@ import {
   FRAMEWORKS,
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
+  isVocabAhead,
   isVocabularyExpired,
   LANGUAGES,
   PUBLIC_FLAGS,
@@ -15,6 +16,7 @@ import {
   PUBLIC_PROGRAMS,
   PUBLIC_SKILLS,
   PUBLIC_SUBCOMMANDS,
+  READ_VOCAB_VERSIONS,
   REGISTRY_MAX_AGE_DAYS,
   VOCAB_SNAPSHOT_DATE,
   TOOL_INPUT_KEYS,
@@ -87,6 +89,21 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
     },
     curated: '293488e7e8be31f4a8a4faf93d30bf8e9840a0c8fc6dc896518f6b3fe561d66a',
   },
+  '3': {
+    files: {
+      'crates.json': 'e83ea4b923d888783660e22d332f9add601513f47e0d8889bc4cf94d6db771f8',
+      'go.json': 'e2e052cd9cde6340972fb15dc148aefac6568bf709d8357f57edededcaf74402',
+      'harness.json': '85485b744d1450ec8661beeb87d906537bb9387790709c2010a8426eb91e567a',
+      'homebrew.json': 'e465819d5d9e0c4af53849f1fcf658abb70fb786a6ecb09c4026a1cee984d91f',
+      'maven.json': 'ed1ba57320b2f63f2057589876098301a8599c71968bd6615d500d5626b504d8',
+      'models.json': '9be01e3c09e8075de4fd8eee0395c68a97bc85680df2b9bca1a63a0b4bc13618',
+      'npm.json': 'f9cf2816adb208b271a50e8f5b73228c96f905681ec41406b3212d2deea8aefa',
+      'programs.json': 'b7ca0803b05be14bf7a09ad2289e632e374254a2e559bff3924db53dfa9746ee',
+      'pypi.json': 'e666a24f743afdc6708d353497751a875874c3aa6509c224c39a04894cec6460',
+      'rubygems.json': '74aa914095289b1c27bfeb72e1367f27ad34c8086ed3b4aa34020b81d3b49bfa',
+    },
+    curated: '293488e7e8be31f4a8a4faf93d30bf8e9840a0c8fc6dc896518f6b3fe561d66a',
+  },
 };
 
 describe('the pinned vocabulary', () => {
@@ -101,6 +118,20 @@ describe('the pinned vocabulary', () => {
       const bytes = readFileSync(new URL(file, vocabDir()));
       expect({ file, bytes: bytes.length, sha256: sha256(bytes) }).toEqual({ file, ...held });
     }
+  });
+});
+
+describe('the vocabularies the pool reads', () => {
+  it('reads its own first, and an earlier one only while its curated lists equal the current ones, since the pool carries one set', () => {
+    expect(READ_VOCAB_VERSIONS[0]).toBe(VOCAB_VERSION);
+    expect(new Set(READ_VOCAB_VERSIONS).size).toBe(READ_VOCAB_VERSIONS.length);
+    for (const version of READ_VOCAB_VERSIONS) expect({ version, curated: PINNED[version]?.curated }).toEqual({ version, curated: curatedDigest() });
+  });
+
+  it('takes only a later whole number as ahead of it', () => {
+    const later = String(Number(VOCAB_VERSION) + 1);
+    expect(READ_VOCAB_VERSIONS.map(isVocabAhead)).toEqual(READ_VOCAB_VERSIONS.map(() => false));
+    expect([later, '1', 'vocab-9', '1e3', ''].map(isVocabAhead)).toEqual([true, false, false, false, false]);
   });
 });
 

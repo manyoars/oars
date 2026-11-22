@@ -135,14 +135,16 @@ const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Obje
  * A call with no read says nothing and logs no recall step: that is nearly every call, and nobody asked. A held push is a hit, for what it would have shown, with no output.
  */
 const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<Outcome> => {
-  // The fit push reads the transcript's tail for its frame, which only Claude Code's hook is given, and a harness whose pre-tool output reaches no model (Copilot) would record an exposure that never happened.
-  if (!via.dialect.claudeLayout) return { hit: false, queried: false };
+  // A harness whose pre-tool output reaches no model (Copilot) would record an exposure that never happened.
+  if (!via.dialect.pushesPreTool) return { hit: false, queried: false };
   const sid = str(input.session_id);
   const tool = str(input.tool_name);
   if (sid === undefined || tool === undefined) return { hit: false, queried: false };
   const index = await readIndex(runtime.storeDir);
   if (index === undefined) return { hit: false, queried: false };
-  const recall = await pushRecall({ storeDir: runtime.storeDir, sid, tool, keys: inputKeys(input), transcript: str(input.transcript_path), platform: process.platform, at: new Date(now()).toISOString(), index });
+  // Claude Code's transcript tail states the frame; another harness's transcript (a Codex rollout) does not, so it names itself and the version its own store states.
+  const frame = via.dialect.claudeLayout ? { transcript: str(input.transcript_path) } : { transcript: undefined, named: { harness: via.dialect.harness, harnessVersion: via.version } };
+  const recall = await pushRecall({ storeDir: runtime.storeDir, sid, tool, keys: inputKeys(input), ...frame, platform: process.platform, at: new Date(now()).toISOString(), index });
   if (recall === undefined) return { hit: false, queried: false };
   return recall.arm === 'shown' ? { say: recall.answer.rendered, hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
@@ -176,7 +178,7 @@ const postTool = async (runtime: SessionsRuntime, input: Input, now: () => numbe
   const index = await readIndex(runtime.storeDir);
   const bundle: NextReads | undefined = await bundleNext(runtime.storeDir, prepared.asker);
   if (index === undefined && bundle === undefined) return { hit: false, queried: false };
-  const action = actionOf(ACTION_TABLES[via.dialect.harness], tool).action;
+  const action = via.dialect.aliases?.get(tool) ?? actionOf(ACTION_TABLES[via.dialect.harness], tool).action;
   const code = errorCodeOf(text);
   const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recoveryByFrame?.[frameKeyOf(prepared.asker)] ?? {}, poolVersion: index.at }, action, code);
   const target = targetClassOfCall(input);
@@ -313,8 +315,16 @@ export const runHook = async (
   let transcript: string | undefined;
   let input: Input = {};
   let version: string | null = null;
+  let recording: Promise<void> | undefined;
   try {
+    // The harness's own recording runs beside the recall (one entry per event both records and pushes): it is fail-open and never throws, so it cannot cost the recall its answer.
+    recording = dialect.record?.(stdin, runtime.storeDir, now);
     input = dialect.readPayload(parse(stdin));
+    // A finished call whose payload carries no failure (Codex has no exit code in `tool_response`) is read from the harness's own record, once, before anything keys on the failure.
+    if (event === 'post-tool' && dialect.failure !== undefined && failureText(input) === undefined) {
+      const failed = await dialect.failure(input);
+      if (failed !== undefined) input = { ...input, error: failed };
+    }
     transcript = str(input.transcript_path);
     key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
@@ -332,6 +342,8 @@ export const runHook = async (
     failure = thrown;
     failed = true;
   }
+  // The recording is awaited whatever the recall did, so the process does not exit with its row half written; it is fail-open, so a rejection here would be a bug in it, not in the session.
+  await recording?.catch(() => undefined);
   const ms = Math.round(performance.now() - started);
   // The failure line is masked once, the same for the hook-calls line and the step row beside it; both writes are guarded, so a counter
   // that cannot be written never costs the session its context.
@@ -346,7 +358,7 @@ export const runHook = async (
   // every other fire reads the transcript's tail the way a push does, so the version and model are there on a miss, a post-tool, and a stop. (A nightly run has no hook input, so it has no transcript to read.)
   const { recall } = outcome;
   const output = outcome.say === undefined ? undefined : dialect.answer(event, outcome.say, input);
-  const stated = recall?.frame !== undefined || transcript === undefined ? undefined : await statedAt(transcript);
+  const stated = recall?.frame !== undefined || transcript === undefined || !dialect.claudeLayout ? undefined : await statedAt(transcript);
   emit('hook', {
     name: event,
     latencyMs: ms,

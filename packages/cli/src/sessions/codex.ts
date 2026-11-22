@@ -55,6 +55,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
+import { EXIT_LINE, OUTPUT_MARK } from './codex-rollout.js';
 import { holdsOnlyRecords } from './head-only.js';
 import { INTERRUPT_MARKER, SHAPE_TOOLS_LINE } from './session-shape.js';
 
@@ -200,8 +201,6 @@ const commandOf = (args: Obj): string | undefined => {
 /** The paths an `apply_patch` input touches (`*** Add|Update|Delete File: <path>`, the grammar of codex-rs/apply-patch). */
 const patchFiles = (input: string): string[] => [...input.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => (match[1] ?? '').trim());
 
-const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
-const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
 const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
 /**
  * A code-mode cell's outcome is its output's first line (the live 0.166/0.167 store, 2026-11-06; upstream rust-v0.167.0 not yet read): `Script completed`, `Script failed` (a second part
