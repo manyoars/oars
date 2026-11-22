@@ -84,6 +84,16 @@ describe.each(installed)('the manifest powershell command under %s', (shell) => 
     expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
   });
 
+  // A guard, not a discriminator: starting the child from a DBCS console encoding (936) keeps the payload intact. Measured on 936, 932, 950, 949, 1252, and 437, the round trip survives with or without the
+  // command's `[Console]::OutputEncoding` statement when stdout is a pipe (as Copilot runs hooks), so that statement is hardening that is pinned by string in hook-dialect.test.ts, not proved red by behavior here.
+  it.runIf(process.platform === 'win32')('keeps the payload byte for byte when the child starts from a DBCS console encoding (code page 936)', async () => {
+    const payload = JSON.stringify({ sessionId: 's', cwd: 'work/app', prompt: 'raw', transformedPrompt: 'say “hello” to René \u{1F680} — café' });
+    const command = `[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(936); ${powershellOf('userPromptTransformed')}`;
+    const { stdout, code } = await runPowershell(shell, command, Buffer.from(payload, 'utf8'), stubFolder('npm'));
+    expect(code).toBe(0);
+    expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
+  });
+
   // Windows PowerShell 5.1 ships with the Restricted policy, which refuses the `.ps1` shim. Copilot logs a hook that exits with anything but 0 or 2 and carries on (hooks reference, "Exit codes for command hooks"),
   // and this manifest registers no preToolUse hook, so the hook fails open: no recall, no block. Exit 2 would be read as additionalContext on PostToolUseFailure, so the code must not be 2.
   it.runIf(shell === 'powershell' && process.platform === 'win32')('fails open when the execution policy refuses the oars-hook.ps1 shim: exit 1, nothing on stdout, never exit 2', async () => {
