@@ -28,26 +28,30 @@ const powershellOf = (event: string): string => {
   return command;
 };
 
-/** A folder holding an `oars-hook` that writes its stdin bytes back unchanged, in the platform's own launcher kind (a `.cmd` on Windows, a script elsewhere). */
-const stubFolder = (): string => {
+/** Which launcher the stub `oars-hook` is: the `.cmd` shim alone, or with the `.ps1` shim npm writes beside it on Windows, which PowerShell resolves first. */
+type Launcher = 'cmd' | 'npm';
+
+/** A folder holding an `oars-hook` that writes its stdin bytes back unchanged, in the platform's own launcher kind (a `.cmd` on Windows, a script elsewhere; `npm` adds the `.ps1`, shaped like npm's `$input | & node ... $args`). */
+const stubFolder = (launcher: Launcher = 'cmd'): string => {
   const folder = mkdtempSync(join(tmpdir(), 'oars-ps-stub-'));
   made.push(folder);
   const echo = join(folder, 'echo.mjs');
   writeFileSync(echo, 'const chunks = [];\nfor await (const chunk of process.stdin) chunks.push(chunk);\nprocess.stdout.write(Buffer.concat(chunks));\n');
   if (process.platform === 'win32') {
     writeFileSync(join(folder, 'oars-hook.cmd'), `@echo off\r\n"${process.execPath}" "${echo}" %*\r\n`);
+    if (launcher === 'npm') writeFileSync(join(folder, 'oars-hook.ps1'), `$input | & "${process.execPath}" "${echo}" $args\r\nexit $LASTEXITCODE\r\n`);
   } else {
-    const launcher = join(folder, 'oars-hook');
-    writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${echo}" "$@"\n`);
-    chmodSync(launcher, 0o755);
+    const script = join(folder, 'oars-hook');
+    writeFileSync(script, `#!/bin/sh\nexec "${process.execPath}" "${echo}" "$@"\n`);
+    chmodSync(script, 0o755);
   }
   return folder;
 };
 
-const runPowershell = (shell: string, command: string, stdin: Buffer, folder: string): Promise<{ stdout: Buffer; code: number | null }> =>
+const runPowershell = (shell: string, command: string, stdin: Buffer, folder: string, policy = 'Bypass'): Promise<{ stdout: Buffer; code: number | null }> =>
   new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `${folder}${delimiter}${process.env.PATH ?? ''}` };
-    const child = spawn(shell, ['-NoProfile', '-NonInteractive', '-Command', command], { env, stdio: ['pipe', 'pipe', 'ignore'], timeout: 60_000 });
+    const child = spawn(shell, ['-NoProfile', '-NonInteractive', ...(process.platform === 'win32' ? ['-ExecutionPolicy', policy] : []), '-Command', command], { env, stdio: ['pipe', 'pipe', 'ignore'], timeout: 60_000 });
     const out: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => {
       out.push(chunk);
@@ -65,6 +69,18 @@ describe.each(installed)('the manifest powershell command under %s', (shell) => 
     const { stdout, code } = await runPowershell(shell, powershellOf('userPromptTransformed'), Buffer.from(payload, 'utf8'), stubFolder());
     expect(code).toBe(0);
     // PowerShell ends a string it pipes to a native command with a newline; the JSON reader ignores it.
+    expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
+  });
+
+  // npm writes `oars-hook`, `oars-hook.cmd`, and `oars-hook.ps1` on Windows, and PowerShell runs the `.ps1`, so the `.cmd` case above never exercises the path a Copilot user's shell takes.
+  // `Bypass` keeps this case about encoding; what the default policy does to the shim is a separate question (the report).
+  it.runIf(process.platform === 'win32')('hands the same payload through the npm-style oars-hook.ps1 shim, the one PowerShell resolves first', async () => {
+    const folder = stubFolder('npm');
+    const resolved = await runPowershell(shell, '(Get-Command oars-hook).Source', Buffer.alloc(0), folder);
+    expect(resolved.stdout.toString('utf8').trim()).toBe(join(folder, 'oars-hook.ps1'));
+    const payload = JSON.stringify({ sessionId: 's', cwd: 'work/app', prompt: 'raw', transformedPrompt: 'say “hello” to René \u{1F680} — café' });
+    const { stdout, code } = await runPowershell(shell, powershellOf('userPromptTransformed'), Buffer.from(payload, 'utf8'), folder);
+    expect(code).toBe(0);
     expect(stdout.toString('utf8').replace(/\r?\n$/, '')).toBe(payload);
   });
 
