@@ -160,8 +160,8 @@ describe('the harness a Copilot recall is read and tagged under', () => {
     await call(made, 'post-tool', { session_id: sid, tool_name: 'Bash', error: 'Exit code 1\nx' });
     const rows = await readRecalls(made.storeDir);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.frame.harness).toBe('copilot');
-    expect(rows[0]?.frame.harnessVersion).toBeNull();
+    expect(rows[0]?.frame?.harness).toBe('copilot');
+    expect(rows[0]?.frame?.harnessVersion).toBeNull();
   });
 
   it('reads a Claude tool name and a Copilot one through the copilot table', () => {
