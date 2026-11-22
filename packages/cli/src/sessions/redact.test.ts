@@ -31,3 +31,34 @@ describe('the email mask and a pinned package alias', () => {
     expect(mask('xnpm:bar@1.0.0')).toBe('xnpm:<email>');
   });
 });
+
+// t1559: the EMAIL rule is the backstop for an address the injected-block rule does not reach, so a real address of any script must be masked whole.
+describe('the email mask and a non-ASCII or bracketed address', () => {
+  const mask = makeRedactor();
+
+  it('masks an internationalized-domain address and its punycode form', () => {
+    expect(mask('mail someone@bücher.de now')).toBe('mail <email> now');
+    expect(mask('mail someone@xn--bcher-kva.de now')).toBe('mail <email> now');
+  });
+
+  it('masks an IP-literal address', () => {
+    expect(mask('mail someone@[192.0.2.1] now')).toBe('mail <email> now');
+    expect(mask('mail someone@[IPv6:2001:db8::1] now')).toBe('mail <email> now');
+  });
+
+  it('leaves a bracketed host that is no IP literal alone', () => {
+    expect(mask('see x@[dead] now')).toBe('see x@[dead] now');
+  });
+
+  it('masks a non-ASCII local part whole', () => {
+    expect(mask('mail jöhn@example.com now')).toBe('mail <email> now');
+  });
+
+  it('leaves a dotless host alone, as in a git remote or ssh target', () => {
+    expect(mask('ssh deploy@localhost')).toBe('ssh deploy@localhost');
+  });
+
+  it('still keeps a pinned alias', () => {
+    expect(mask('npm install foo@npm:bar@1.0.0')).toBe('npm install foo@npm:bar@1.0.0');
+  });
+});

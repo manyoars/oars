@@ -30,7 +30,9 @@ export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b([A-Za-z0-9_-]*tokens)(["']?\s*[=:]\s*)(["']?)(?!\d+(?![^\s"'&,;]))[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
 ];
 
-const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+// Unicode letters, marks, and digits, so `jöhn@bücher.de` is one address; a bracketed IP literal (`someone@[192.0.2.1]`) is a host too. A dotless host
+// (`deploy@localhost`) is left alone: `user@host` is an ssh target or git remote in logs far more often than a mailbox.
+const EMAIL = /[\p{L}\p{M}\p{N}._%+-]+@(?:[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)+|\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[0-9A-Fa-f:.]+)\])/gu;
 // A pinned alias, `foo@npm:bar@1.0.0` or `jsr:@scope/bar@1.0.0`, ends in `bar@1.0.0`, which EMAIL reads as an address. Digits and dots after
 // the `@` are a version, never a domain, so that one shape right after `npm:` or `jsr:` (and an optional scope) is kept. An all-numeric four-part tail is an
 // IP address, a real host, so it stays masked (as in `extract.ts` `VERSIONED`); any other address stays masked too.
@@ -309,4 +311,4 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
-export const REDACTION_VERSION = '5';
+export const REDACTION_VERSION = '6';
