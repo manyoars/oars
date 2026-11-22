@@ -1,6 +1,7 @@
 import { createHash, webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
+import { READ_VOCAB_VERSIONS } from '../../cli/src/sessions/public-vocabulary.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
 import { DEFAULT_FLOORS, floorsOf } from './floors.js';
@@ -196,6 +197,41 @@ describe('a bundle over five accounts', () => {
     // The literal stands in for a private version, and publicVersion hands it back unchanged, so only the guard keeps the pooled private bucket from being served by name.
     expect(await pool.get(`/bundle/claude-code/%3Cliteral%3E/${VOCAB_VERSION}`, token)).toMatchObject({ status: 400, json: { error: 'unknown_harness_version', field: 'harnessVersion' } });
     expect(await pool.get('/bundle/claude-code/2.1.314/9', token)).toMatchObject({ status: 400, json: { error: 'unknown_vocab_version', field: 'vocabVersion' } });
+  });
+
+  it('serves each vocabulary it reads, stated in the payload and the ETag, and refuses an earlier one with its status', async () => {
+    const fresh = await startPool();
+    try {
+      const { token } = await fresh.signIn('github', stubUser('1101'));
+      const tags = new Set<string>();
+      for (const vocab of READ_VOCAB_VERSIONS) {
+        const served = await fresh.raw(`/bundle/claude-code/2.1.314/${vocab}`, token);
+        expect(served.status).toBe(200);
+        const payload: unknown = JSON.parse(String(Reflect.get(Object(served.json), 'payload')));
+        expect(payload).toMatchObject({ vocabVersion: vocab, books: { vocabVersion: vocab } });
+        tags.add(served.headers.get('etag') ?? '');
+      }
+      // A cached bundle of one vocabulary is never taken for another's.
+      expect(tags.size).toBe(READ_VOCAB_VERSIONS.length);
+      expect(await fresh.get('/bundle/claude-code/2.1.314/1', token)).toMatchObject({ status: 400, json: { error: 'unknown_vocab_version', field: 'vocabVersion' } });
+    } finally {
+      await fresh.dispose();
+    }
+  });
+
+  it('takes a deposit of each vocabulary it reads and of an earlier one, and refuses a later one before reading it', async () => {
+    const fresh = await startPool();
+    try {
+      const { token } = await fresh.signIn('github', stubUser('1102'));
+      await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
+      for (const [at, vocab] of [...READ_VOCAB_VERSIONS, '1'].entries()) {
+        expect((await fresh.post('/v1/deposits', { ...sampleSkeleton(`11020000000000${String(at).padStart(2, '0')}`), vocabVersion: vocab }, token)).status).toBe(201);
+      }
+      const later = String(Number(VOCAB_VERSION) + 1);
+      expect(await fresh.post('/v1/deposits', { ...sampleSkeleton('1102000000000099'), vocabVersion: later }, token)).toMatchObject({ status: 409, json: { error: 'vocabulary_ahead', field: 'vocabVersion' } });
+    } finally {
+      await fresh.dispose();
+    }
   });
 
   it('has no route by stack, and no other path shape', async () => {

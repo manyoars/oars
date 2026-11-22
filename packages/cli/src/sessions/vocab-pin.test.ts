@@ -6,6 +6,7 @@ import {
   FRAMEWORKS,
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
+  isVocabAhead,
   isVocabularyExpired,
   LANGUAGES,
   PUBLIC_FLAGS,
@@ -15,6 +16,7 @@ import {
   PUBLIC_PROGRAMS,
   PUBLIC_SKILLS,
   PUBLIC_SUBCOMMANDS,
+  READ_VOCAB_VERSIONS,
   REGISTRY_MAX_AGE_DAYS,
   VOCAB_SNAPSHOT_DATE,
   TOOL_INPUT_KEYS,
@@ -101,6 +103,20 @@ describe('the pinned vocabulary', () => {
       const bytes = readFileSync(new URL(file, vocabDir()));
       expect({ file, bytes: bytes.length, sha256: sha256(bytes) }).toEqual({ file, ...held });
     }
+  });
+});
+
+describe('the vocabularies the pool reads', () => {
+  it('reads its own first, and an earlier one only while its curated lists equal the current ones, since the pool carries one set', () => {
+    expect(READ_VOCAB_VERSIONS[0]).toBe(VOCAB_VERSION);
+    expect(new Set(READ_VOCAB_VERSIONS).size).toBe(READ_VOCAB_VERSIONS.length);
+    for (const version of READ_VOCAB_VERSIONS) expect({ version, curated: PINNED[version]?.curated }).toEqual({ version, curated: curatedDigest() });
+  });
+
+  it('takes only a later whole number as ahead of it', () => {
+    const later = String(Number(VOCAB_VERSION) + 1);
+    expect(READ_VOCAB_VERSIONS.map(isVocabAhead)).toEqual(READ_VOCAB_VERSIONS.map(() => false));
+    expect([later, '1', 'vocab-9', '1e3', ''].map(isVocabAhead)).toEqual([true, false, false, false, false]);
   });
 });
 

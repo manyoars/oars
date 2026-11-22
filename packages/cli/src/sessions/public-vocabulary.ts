@@ -280,6 +280,14 @@ export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC
 export const VOCAB_VERSION = '2';
 /** The day the snapshots were taken. It must equal `snapshotDate` in vocab/manifest.json, which the loader checks. */
 export const VOCAB_SNAPSHOT_DATE = '2026-11-04';
+/**
+ * The vocabularies the pool built from this release reads: its own first, then any earlier one whose clients have not all upgraded yet. The pool
+ * carries one set of curated lists, so an earlier version stays here only while its curated lists equal this one's (vocab-pin.test.ts checks it):
+ * each deposit is then read with the lists it was built under, never with another version's.
+ */
+export const READ_VOCAB_VERSIONS: readonly string[] = [VOCAB_VERSION];
+/** A version this release's pool does not read yet because it is later than its own: a batch built under it waits in its client's outbox. A version that is not a whole number is no later one. */
+export const isVocabAhead = (version: string): boolean => /^[0-9]{1,9}$/.test(version) && Number(version) > Number(VOCAB_VERSION);
 /** How old a snapshot may be before `deposit` builds no batch (spec Section 7, `registry_max_age`). */
 export const REGISTRY_MAX_AGE_DAYS = 30;
 /** Names admitted per package ecosystem, by the registry's own download counts (spec Section 7, `seed_top`). */

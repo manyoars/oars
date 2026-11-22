@@ -1,6 +1,7 @@
 // Serving a bundle: one harness version's cells, derived and signed. The signature covers the exact payload bytes and the client pinned the public half at login, so a replica can be
 // kept and checked again anywhere.
 import { type Bundle, isBundleVersion, isHarness, type SignedBundle, VOCAB_VERSION, BUNDLE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { READ_VOCAB_VERSIONS } from '../../cli/src/sessions/public-vocabulary.js';
 import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
 import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
 import { accessOf } from './access.js';
@@ -32,7 +33,11 @@ const generationOf = async (env: Env): Promise<number> => {
  * What names this bundle: the code that derives it (the methods and the list of families it derives), the floors (public, clear, and disclosure, and any a family has of its own), the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[], floors: Floors): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, wireFloors(floors), harness, harnessVersion, VOCAB_VERSION, generation])}"`;
+export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[], floors: Floors, vocabVersion: string = VOCAB_VERSION): string =>
+  `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, wireFloors(floors), harness, harnessVersion, vocabVersion, generation])}"`;
+
+/** The bundle as the vocabulary it was asked under states it: the cells do not depend on it (every version this pool reads shares its curated lists), and a client checks that the bundle names its own. */
+export const statedFor = (bundle: Bundle, vocabVersion: string): Bundle => ({ ...bundle, vocabVersion, ...(bundle.books === undefined ? {} : { books: { ...bundle.books, vocabVersion } }) });
 
 /** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
 const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);
@@ -59,7 +64,8 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   if (!isHarness(harness)) return refuse(400, 'unknown_harness', 'That is not a harness this pool serves.', 'harness');
   if (!isBundleVersion(harnessVersion)) return refuse(400, 'unknown_harness_version', 'That is not a public harness version.', 'harnessVersion');
-  if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
+  // The previous version is read too, so a client that has not upgraded yet keeps its bundle while the pool runs the new one.
+  if (!READ_VOCAB_VERSIONS.includes(vocabVersion)) return refuse(400, 'unknown_vocab_version', `This pool reads vocabulary version ${READ_VOCAB_VERSIONS.join(' or ')}.`, 'vocabVersion');
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
   const kid = keyIdOf(env);
@@ -69,7 +75,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   const floors = floorsOf(env, (line) => {
     console.warn(line);
   });
-  const etag = etagOf(harness, harnessVersion, generation, [...SERVED.map(({ name }) => name), 'books'], floors);
+  const etag = etagOf(harness, harnessVersion, generation, [...SERVED.map(({ name }) => name), 'books'], floors, vocabVersion);
   // Before the spend and before the pool is read: a bundle that has not changed is not sent, so it costs the account nothing.
   if (matches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers: { etag } });
   const now = Date.now();
@@ -83,7 +89,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
     await env.DB.prepare(WEEK_RESET).bind(week).run();
-    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, floors, now), floors), key, kid), { etag });
+    return answer(200, await signed(statedFor(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, floors, now), floors), vocabVersion), key, kid), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();
