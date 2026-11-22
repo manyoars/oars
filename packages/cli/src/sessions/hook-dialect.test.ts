@@ -135,7 +135,7 @@ describe('the answer, in Copilot\'s shape', () => {
 
   it('keeps the Claude Code answer exactly as it was', async () => {
     const made = await staged();
-    const start = JSON.parse((await call(made, 'session-start', { session_id: 'live', cwd: REPO }, CLAUDE_DIALECT)) ?? '{}') as Json;
+    const start = answerOf(await call(made, 'session-start', { session_id: 'live', cwd: REPO }, CLAUDE_DIALECT));
     expect(Object.keys(start)).toEqual(['hookSpecificOutput']);
     expect(asRecord(start.hookSpecificOutput).hookEventName).toBe('SessionStart');
   });
