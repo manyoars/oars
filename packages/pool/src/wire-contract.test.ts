@@ -120,9 +120,15 @@ describe('the versions a deposit carries', () => {
     expect(await post(without('fieldsVersion'))).toMatchObject({ status: 422, json: { field: 'fieldsVersion' } });
   });
 
-  it('store the versions a newer client names, so an older server reads a newer client', async () => {
-    expect((await post({ ...baseline(), fieldsVersion: FIELD_LIST_VERSION + 3, vocabVersion: '99' })).status).toBe(201);
-    expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: '99', fields_version: FIELD_LIST_VERSION + 3 });
+  it('store the field list version a newer client names, so an older server reads a newer client', async () => {
+    expect((await post({ ...baseline(), fieldsVersion: FIELD_LIST_VERSION + 3 })).status).toBe(201);
+    expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: VOCAB_VERSION, fields_version: FIELD_LIST_VERSION + 3 });
+  });
+
+  it('refuse a later vocabulary before storing anything, since this pool would read its names with older lists', async () => {
+    const ahead = 'fedcba9876543210';
+    expect(await post({ ...baseline(ahead), vocabVersion: '99' })).toMatchObject({ status: 409, json: { error: 'vocabulary_ahead', field: 'vocabVersion' } });
+    expect(await (await pool.db()).prepare('SELECT id FROM deposits WHERE id = ?').bind(ahead).first()).toBeNull();
   });
 
   it('keep the names of a format 7 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
