@@ -207,6 +207,17 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 | `PostToolUseFailure` (matcher: every tool the action table maps, and `mcp__.*`) | the recovery edge: for a failed call it reads what followed this failure (same action and error class) in the kept pool bundle, else in this store, and adds "after a failed X (code), the next step was Y xN". The edge line stays silent when the top next step is the failed action again (a retry), when a local edge has fewer than 5 followed steps, and when nothing followed. When the kept bundle holds a same-target read for the failed call's code, action, and target class, one more line says which step came back ok how many of the times it followed; it follows the edge line or, when no edge line is served, stands alone. Its silence means a retry led, tied, or was withheld, and the read is empty until clients redeposit. A call the cells do not cover keeps the older line, "seen in N sessions; what followed: X", under the same holdback, silent on a strict retry lead. Every served or held line is a `recalls.jsonl` row; 10 percent of sessions are held. For Bash and PowerShell a shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder the saved allowlist holds (every folder until a deposit names some, less any `--deny`). Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the next sweep | under 5 s |
 
+GitHub Copilot gets the same recall from the plugin's `com.github.copilot/hooks/hooks.json`, not from `hook install`; each command is `oars-hook <event> --harness copilot`, and the answer is Copilot's own shape (a top-level `additionalContext`, or `modifiedTransformedPrompt` for the prompt), never `hookSpecificOutput`:
+
+| Copilot event | Does |
+|---|---|
+| `SessionStart` | the repository's recall block, and the positions table when one qualifies, as `additionalContext` |
+| `userPromptTransformed` | the positions table again, only when it changed since this session's last one, appended after the model-facing prompt as `modifiedTransformedPrompt` |
+| `PostToolUseFailure` | the recovery line for the failed call, as `additionalContext` |
+| `SessionEnd` | starts the due sweep and send; Copilot's payload names no transcript, so nothing is deposited here (the sweep reads Copilot's session store under `--allow copilot`) |
+
+There is no `PreToolUse` entry for Copilot, because it drops that event's output. The harness version comes from the session's `session-state/<id>/events.jsonl` (`session.start`); with none, the recall is read across the harness's versions.
+
 Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered. The pre-filter is a `read`, a `case`, and a `printf | node` in the shell the harness runs hooks in (Git Bash on Windows), so it needs no `findstr` and no extra dependency. Writers of the store (`SessionEnd`, the sweep, `deposit`) take `store.lock`, so parallel sessions cannot lose each other's `state.json` entries; a lock older than ten minutes is broken.
 
 ```bash

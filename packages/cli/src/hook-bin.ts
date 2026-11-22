@@ -1,4 +1,4 @@
-// The one entry file the installed hooks and the detached sender run: `node hook-bin.js <session-start|pre-tool|post-tool|stop|nightly>`, with the
+// The one entry file the installed hooks and the detached sender run: `node hook-bin.js <session-start|prompt|pre-tool|post-tool|stop|nightly> [--harness <name>]`, with the
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { hookEmitter } from './telemetry/hook-emit.js';
 import { sendNightly } from './telemetry/send.js';
+import { dialectOf, harnessFlag } from './sessions/hook-dialect.js';
 import { HOOK_EVENTS, hookRuntime, nightlyTelemetry, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
@@ -51,7 +52,9 @@ try {
     const { runMachineChild } = await import('./sessions/machine-child-deps.js');
     await runMachineChild(process.env, hookRuntime('stop', process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }), versionOf(), Date.now, process.argv[3] ?? '');
   }
-  if (event !== undefined) {
+  // `--harness <name>` says whose hook this is (Copilot's manifest passes it); a name with no dialect is a hook this program cannot answer, so it runs nothing and prints nothing.
+  const dialect = dialectOf(harnessFlag(process.argv), process.env, homedir());
+  if (event !== undefined && dialect !== undefined) {
     const output = await runHook(
       event,
       event === 'nightly' ? '' : await readStdin(),
@@ -59,6 +62,7 @@ try {
       Date.now,
       nightlyTelemetry(event, process.env, process.platform, homedir(), versionOf, Date.now),
       hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
+      dialect,
     );
     if (output !== undefined) process.stdout.write(output);
     // The session just ended and its deposit is written: start a due sweep and send, detached, and do not wait for it (the hook stays sub-second and prints nothing more). Loaded only here so the per-tool hooks never pay for it.

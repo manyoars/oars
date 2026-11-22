@@ -249,10 +249,12 @@ export interface NextInput {
   tail: string;
   platform: string;
   at: string;
+  /** The harness and version of a hook that is not Claude Code's: it has no transcript tail to state them, so it names them. Absent for Claude Code. */
+  named?: { harness: Harness; harnessVersion: string | null };
 }
 
-/** The asker's frame, from the tail of its transcript. */
-export const frameFor = (input: Pick<NextInput, 'tail' | 'platform' | 'at'>): Frame => frameOfTail(input.tail, input.platform, input.at);
+/** The asker's frame, from the tail of its transcript or, for a harness that names itself, from what it named. */
+export const frameFor = (input: Pick<NextInput, 'tail' | 'platform' | 'at' | 'named'>): Frame => frameOfTail(input.tail, input.platform, input.at, input.named);
 
 /** The reads of the kept bundle for the asker's harness and version; undefined with no version stated, no bundle, or a bundle that does not verify (never an error). */
 export const bundleNext = async (storeDir: string, asker: Asker): Promise<NextReads | undefined> => {

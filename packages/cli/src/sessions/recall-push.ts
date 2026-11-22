@@ -5,7 +5,7 @@ import type { HookIndex } from './hook-index.js';
 import { appendRecall, armOf, makeRecall, parseRecalls, recallsPath, type Recall } from './recall-object.js';
 import { toolShapeId } from './recall-reads.js';
 import { evidenceOf, renderAnswer } from './recall-render.js';
-import { harnessOf, type Frame } from './schema.js';
+import { harnessOf, type Frame, type Harness } from './schema.js';
 import { statedOf, tailOf } from './transcript-tail.js';
 
 export { tailOf };
@@ -14,9 +14,11 @@ export { tailOf };
  * The asker's frame, as far as a transcript's tail states it. The stack and the shell need the whole transcript, which a hook has no time to read, so they stay
  * unknown here; `delta` says unknown for them, and derive reads the session's real frame.
  */
-export const frameOfTail = (tail: string, platform: string, at: string): Frame => {
-  const { harnessVersion, model, effort } = statedOf(tail);
-  return closedFrame({ harness: harnessOf({}), harnessVersion, model, effort, day: utcDay(at), platform, shell: null, stack: closedStack({ languages: [], frameworks: [], size: null }) });
+export const frameOfTail = (tail: string, platform: string, at: string, named?: { harness: Harness; harnessVersion: string | null }): Frame => {
+  const stated = statedOf(tail);
+  // A harness with no transcript tail names itself and states its own version; the model and effort still come from the tail, which is then empty.
+  const { harnessVersion, model, effort } = named === undefined ? stated : { ...stated, harnessVersion: named.harnessVersion };
+  return closedFrame({ harness: named?.harness ?? harnessOf({}), harnessVersion, model, effort, day: utcDay(at), platform, shell: null, stack: closedStack({ languages: [], frameworks: [], size: null }) });
 };
 
 export interface PushInput {

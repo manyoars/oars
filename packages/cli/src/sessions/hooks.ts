@@ -5,10 +5,11 @@ import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
-import { frameWords, HOOK_HARNESS, recallFields } from '../telemetry/fields.js';
+import { frameWords, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { ACTION_TABLES, actionOf } from './actions.js';
+import { CLAUDE_DIALECT, type Dialect } from './hook-dialect.js';
 import { classOfCall, errorCodeOf, signatureOf } from './extract.js';
 import { makeRepoRoot } from './repo-root.js';
 import { recordCandidates } from './candidates.js';
@@ -50,11 +51,15 @@ const parse = (stdin: string): Input => {
 
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 
-const additional = (eventName: string, context: string): string => `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: context } })}\n`;
+/** The harness a hook call runs for: its dialect and the version it runs, read once per call (null when the dialect has none to read, or the read found none). */
+interface Via {
+  dialect: Dialect;
+  version: string | null;
+}
 
 interface Outcome {
-  /** What goes to stdout. */
-  output?: string;
+  /** The text the model should see; the dialect turns it into what goes to stdout. */
+  say?: string;
   hit: boolean;
   /** A lookup hook that read the index and searched it: only then did a recall query run, so only then is an ok `recall` row logged. */
   queried: boolean;
@@ -67,21 +72,27 @@ interface Outcome {
 }
 
 /** What a next-node read needs of the hook's input: the session, the transcript's tail (version, model), and the clock; undefined when the harness gave no session, since the holdback arm is the session's. */
-const nextInputOf = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<{ next: NextInput; asker: Asker } | undefined> => {
+const nextInputOf = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<{ next: NextInput; asker: Asker } | undefined> => {
   const sid = str(input.session_id);
   if (sid === undefined) return undefined;
+  const at = new Date(now()).toISOString();
+  // Claude Code states its version in its transcript's tail; another harness has no such tail, so it names itself and the version its own session store states (Copilot: the session-state file).
+  if (!via.dialect.claudeLayout) {
+    const asker: Asker = { harness: via.dialect.harness, harnessVersion: via.version };
+    return { next: { storeDir: runtime.storeDir, sid, tail: '', platform: process.platform, at, named: asker }, asker };
+  }
   const transcript = str(input.transcript_path);
   const tail = transcript === undefined ? '' : await tailOf(transcript);
   const { harnessVersion } = statedOf(tail);
-  return { next: { storeDir: runtime.storeDir, sid, tail, platform: process.platform, at: new Date(now()).toISOString() }, asker: { harness: HOOK_HARNESS, harnessVersion } };
+  return { next: { storeDir: runtime.storeDir, sid, tail, platform: process.platform, at }, asker: { harness: via.dialect.harness, harnessVersion } };
 };
 
 /**
  * The split-positions table (Item 3): the kept bundle's positions first, the local pool's second. A `repeat` read (UserPromptSubmit) goes out only when the table differs from
  * the one this session was last sent, shown or held, so a held session and a shown one hear the same number of times.
  */
-const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () => number, index: HookIndex | undefined, repeat: boolean): Promise<Recall | undefined> => {
-  const prepared = await nextInputOf(runtime, input, now);
+const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via, index: HookIndex | undefined, repeat: boolean): Promise<Recall | undefined> => {
+  const prepared = await nextInputOf(runtime, input, now, via);
   if (prepared === undefined) return undefined;
   const bundle = await bundleNext(runtime.storeDir, prepared.asker);
   const positions = mergePositions(bundle?.positions ?? [], index?.positionsByFrame?.[frameKeyOf(prepared.asker)] ?? []);
@@ -90,30 +101,31 @@ const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () =>
   return positionsRecall(prepared.next, prepared.asker, positions, bundle?.poolVersion ?? index?.at ?? '', previous);
 };
 
-const sessionStart = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
+const sessionStart = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<Outcome> => {
   const cwd = str(input.cwd);
   const session = str(input.session_id);
-  if (session !== undefined && cwd !== undefined) await recordCandidates(runtime.storeDir, { session, cwd, claudeDir: dirname(runtime.projectsRoot), at: new Date(now()).toISOString() });
+  // The candidate census counts Claude Code's instruction files and `.claude` settings; it says nothing of another harness's session, so only Claude Code's start records one.
+  if (via.dialect.claudeLayout && session !== undefined && cwd !== undefined) await recordCandidates(runtime.storeDir, { session, cwd, claudeDir: dirname(runtime.projectsRoot), at: new Date(now()).toISOString() });
   const index = await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
-  const recall = await positionsTable(runtime, input, now, index, false);
+  const recall = await positionsTable(runtime, input, now, via, index, false);
   const model = str(input.model);
   const shown = recall?.arm === 'shown' ? recall.answer.rendered : undefined;
   const text = [block, shown].filter((part) => part !== undefined).join('\n\n');
   return {
     hit: text !== '' || recall !== undefined,
     queried: index !== undefined || recall !== undefined,
-    ...(text === '' ? {} : { output: additional('SessionStart', text) }),
+    ...(text === '' ? {} : { say: text }),
     ...(recall === undefined ? {} : { recall }),
     ...(model === undefined ? {} : { model }),
   };
 };
 
 /** UserPromptSubmit: the positions table again, only when it changed since this session's last one. */
-const prompt = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
-  const recall = await positionsTable(runtime, input, now, await readIndex(runtime.storeDir), true);
+const prompt = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<Outcome> => {
+  const recall = await positionsTable(runtime, input, now, via, await readIndex(runtime.storeDir), true);
   if (recall === undefined) return { hit: false, queried: false };
-  return recall.arm === 'shown' ? { output: additional('UserPromptSubmit', recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
+  return recall.arm === 'shown' ? { say: recall.answer.rendered, hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Object.keys(input.tool_input) : []);
@@ -122,7 +134,9 @@ const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Obje
  * The fit push. The only output this hook writes is `additionalContext`: it holds no permission decision and changes no input, so whatever it does, the call runs as asked.
  * A call with no read says nothing and logs no recall step: that is nearly every call, and nobody asked. A held push is a hit, for what it would have shown, with no output.
  */
-const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
+const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<Outcome> => {
+  // The fit push reads the transcript's tail for its frame, which only Claude Code's hook is given, and a harness whose pre-tool output reaches no model (Copilot) would record an exposure that never happened.
+  if (!via.dialect.claudeLayout) return { hit: false, queried: false };
   const sid = str(input.session_id);
   const tool = str(input.tool_name);
   if (sid === undefined || tool === undefined) return { hit: false, queried: false };
@@ -130,7 +144,7 @@ const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number
   if (index === undefined) return { hit: false, queried: false };
   const recall = await pushRecall({ storeDir: runtime.storeDir, sid, tool, keys: inputKeys(input), transcript: str(input.transcript_path), platform: process.platform, at: new Date(now()).toISOString(), index });
   if (recall === undefined) return { hit: false, queried: false };
-  return recall.arm === 'shown' ? { output: additional('PreToolUse', recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
+  return recall.arm === 'shown' ? { say: recall.answer.rendered, hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 /** A failed tool arrives as PostToolUseFailure with the text in `error` (Bash and PowerShell start it with `Exit code N`); a PostToolUse response that starts that way is read too. */
@@ -154,24 +168,23 @@ const targetClassOfCall = (input: Input): string => {
  * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing, signature line included; the signature line answers only a failure no cell covers.
  * The same-target line follows the edge line or stands alone, under its own retry rule, which the pool applies when it leaves the read out.
  */
-const postTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
+const postTool = async (runtime: SessionsRuntime, input: Input, now: () => number, via: Via): Promise<Outcome> => {
   const tool = str(input.tool_name);
   const text = failureText(input);
-  const prepared = tool === undefined || text === undefined ? undefined : await nextInputOf(runtime, input, now);
+  const prepared = tool === undefined || text === undefined ? undefined : await nextInputOf(runtime, input, now, via);
   if (tool === undefined || text === undefined || prepared === undefined) return { hit: false, queried: false };
   const index = await readIndex(runtime.storeDir);
   const bundle: NextReads | undefined = await bundleNext(runtime.storeDir, prepared.asker);
   if (index === undefined && bundle === undefined) return { hit: false, queried: false };
-  const action = actionOf(ACTION_TABLES['claude-code'], tool).action;
+  const action = actionOf(ACTION_TABLES[via.dialect.harness], tool).action;
   const code = errorCodeOf(text);
   const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recoveryByFrame?.[frameKeyOf(prepared.asker)] ?? {}, poolVersion: index.at }, action, code);
-  const event = str(input.hook_event_name) ?? 'PostToolUseFailure';
   const target = targetClassOfCall(input);
   const same = target === 'none' ? undefined : sameTargetServed(bundle?.reads, code, action, target);
   if (decision.kind === 'serve' || same !== undefined) {
     // The same-target line goes after the edge line in one row; with no edge it stands alone, and then it also stands in for the signature line.
     const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision.kind === 'serve' ? decision : { edges: [], poolVersion: bundle?.poolVersion ?? '' }, same);
-    return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
+    return recall.arm === 'shown' ? { say: recall.answer.rendered, hit: true, queried: true, recall } : { hit: true, queried: true, recall };
   }
   // A same-step retry, a local cell too thin to serve, and a cell whose top is that nothing followed all end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
   if (decision.kind === 'retry' || decision.kind === 'floor' || decision.kind === 'ended') return { hit: false, queried: true };
@@ -179,7 +192,7 @@ const postTool = async (runtime: SessionsRuntime, input: Input, now: () => numbe
   const found = index?.signatures[sig];
   if (index === undefined || found === undefined || isSignatureRetry(tool, found)) return { hit: false, queried: true };
   const recall = await signatureRecall(prepared.next, prepared.asker, tool, sig, found, index.at);
-  return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
+  return recall.arm === 'shown' ? { say: recall.answer.rendered, hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
@@ -289,6 +302,7 @@ export const runHook = async (
   now: () => number,
   telemetry?: NightlyTelemetry,
   emit: Emit = noEmit,
+  dialect: Dialect = CLAUDE_DIALECT,
 ): Promise<string | undefined> => {
   const started = performance.now();
   let session: string | null = null;
@@ -297,15 +311,21 @@ export const runHook = async (
   let failure: unknown;
   let key: string | null = null;
   let transcript: string | undefined;
+  let input: Input = {};
+  let version: string | null = null;
   try {
-    const input = parse(stdin);
+    input = dialect.readPayload(parse(stdin));
     transcript = str(input.transcript_path);
     key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
-    if (event === 'session-start') outcome = await sessionStart(runtime, input, now);
-    else if (event === 'prompt') outcome = await prompt(runtime, input, now);
-    else if (event === 'pre-tool') outcome = await preTool(runtime, input, now);
-    else if (event === 'post-tool') outcome = await postTool(runtime, input, now);
+    // Only the hooks that look something up need the version; a session-end or nightly call never reads the store.
+    const sid = str(input.session_id);
+    if (dialect.version !== undefined && sid !== undefined && event !== 'stop' && event !== 'nightly') version = await dialect.version(sid);
+    const via: Via = { dialect, version };
+    if (event === 'session-start') outcome = await sessionStart(runtime, input, now, via);
+    else if (event === 'prompt') outcome = await prompt(runtime, input, now, via);
+    else if (event === 'pre-tool') outcome = await preTool(runtime, input, now, via);
+    else if (event === 'post-tool') outcome = await postTool(runtime, input, now, via);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
     else outcome = await nightly(runtime, now, telemetry);
   } catch (thrown) {
@@ -325,16 +345,17 @@ export const runHook = async (
   // After the answer is settled and the local rows are written; it runs before hook-bin prints, at the cost measured in t876 item 5. `emit` never throws. A push states its own frame;
   // every other fire reads the transcript's tail the way a push does, so the version and model are there on a miss, a post-tool, and a stop. (A nightly run has no hook input, so it has no transcript to read.)
   const { recall } = outcome;
+  const output = outcome.say === undefined ? undefined : dialect.answer(event, outcome.say, input);
   const stated = recall?.frame !== undefined || transcript === undefined ? undefined : await statedAt(transcript);
   emit('hook', {
     name: event,
     latencyMs: ms,
     outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
-    bytes: Buffer.byteLength(outcome.output ?? ''),
+    bytes: Buffer.byteLength(output ?? ''),
     // The nightly is the detached sender (hook-bin.js nightly), not a harness's hook: it names no harness.
-    ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? HOOK_HARNESS, recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
+    ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? dialect.harness, recall?.frame?.harnessVersion ?? version ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
   // A push is a recall: its read is the family its query names (the `fit` push names none), and its arm is the exposure record, as a count of one.
   if (recall !== undefined) emit('recall', recallFields(recall, [recall.query.family ?? 'fit']));
-  return outcome.output;
+  return output;
 };
