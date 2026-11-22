@@ -71,7 +71,7 @@ describe('the Copilot hooks manifest', () => {
     const entry = entryOf(event);
     expect(entry.type).toBe('command');
     expect(String(entry.bash)).toBe(`command -v oars-hook >/dev/null || exit 0; oars-hook ${hook} --harness copilot`);
-    expect(String(entry.powershell)).toBe(`if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook ${hook} --harness copilot`);
+    expect(String(entry.powershell)).toBe(`if (-not (Get-Command oars-hook -ErrorAction SilentlyContinue)) { exit 0 }; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::In.ReadToEnd() | oars-hook ${hook} --harness copilot`);
     expect(typeof entry.timeoutSec).toBe('number');
   });
 
