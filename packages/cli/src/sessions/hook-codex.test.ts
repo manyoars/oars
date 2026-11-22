@@ -300,8 +300,9 @@ describe('the version a hook-call event states', () => {
   };
 
   it('takes nothing from a Claude-shaped line in a Codex rollout, and does take it under the Claude layout', async () => {
-    expect(await stated(codex)).not.toHaveProperty('harnessVersion');
-    expect(await stated(codex)).not.toHaveProperty('model');
+    const fromCodex = await stated(codex);
+    expect(fromCodex).not.toHaveProperty('harnessVersion');
+    expect(fromCodex).not.toHaveProperty('model');
     expect(await stated(CLAUDE_DIALECT)).toMatchObject({ harnessVersion: '9.9.9', model: 'claude-opus-4-5' });
   });
 });
