@@ -1,5 +1,6 @@
 // The blocks a harness injects are replaced by `[injected <kind> <hash>]` and nothing else in a line moves. Every fixture is made up: the
 // "instructions" are filler sentences, so no real instruction text, path, or name is in this file.
+import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { injectedRule, learnInjected, type JsonObject } from './injected.js';
 import { redactTranscript } from './redact.js';
@@ -337,5 +338,45 @@ describe('a tool definition a request blob carries', () => {
   it('leaves a block with a tool that has no definition', () => {
     const plain = { type: 'api-request-blob', message: { role: 'user', content: [{ type: 'tool_reference', tool: { name: 'Lamp' } }, { type: 'tool_reference', tool: 'Lamp' }] } };
     expect(run(plain)).toBe(plain);
+  });
+});
+
+// t1559: the `# userEmail` block Claude Code puts in a session's opening context is hashed with the rest of the reminder it sits in, never written as text.
+describe('the userEmail block of an opening context', () => {
+  const ADDRESS = 'someone@example.com';
+  const normalized = (value: string): string => value.replace(/\s+/g, ' ').trim();
+  const hashOf = (value: string): string => createHmac('sha256', KEY).update(normalized(value)).digest('hex').slice(0, 12);
+  const context = `As you answer the user's questions, you can use the following context:\n# userEmail\nThe user's email address is ${ADDRESS}. Use this email address only to identify the user.\n\nIMPORTANT: this context may or may not be relevant to your tasks.`;
+  const deposit = (line: JsonObject): string => redactTranscript(`${JSON.stringify(line)}\n`, [], [], KEY).text;
+
+  it('is hashed whole, and the address stays out of the deposit, with the context lines around it or without', () => {
+    const withLines = reminder(context);
+    const bare = reminder(`# userEmail\nThe user's email address is ${ADDRESS}.`);
+    for (const block of [withLines, bare]) {
+      for (const content of [`${block}\nplease list the files`, [{ type: 'text', text: block }, { type: 'text', text: 'typed words' }]]) {
+        const out = deposit({ type: 'user', message: { role: 'user', content } });
+        expect(out).not.toContain(ADDRESS);
+        expect(out).not.toContain('userEmail');
+        expect(out).toContain(`[injected system-reminder ${hashOf(block)}]`);
+      }
+    }
+  });
+
+  it('is hashed when it is the second reminder of the opening message, and as a meta message or a tool result', () => {
+    const block = reminder(context);
+    const second = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: `${reminder(FILLER)}\n${block}` }] } };
+    const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: block }] } };
+    const result = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: `output\n${block}` }] } };
+    for (const line of [second, meta, result]) expect(deposit(line)).not.toContain(ADDRESS);
+    expect(deposit(second)).toContain(`[injected system-reminder ${hashOf(block)}]`);
+    expect(deposit(result)).toContain(`[injected system-reminder ${hashOf(block)}]`);
+  });
+
+  it('is hashed when a request blob repeats it as text of the meta message', () => {
+    const block = reminder(context);
+    const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: block }] } };
+    const blob = { type: 'api-request-blob', message: { role: 'user', content: [{ type: 'text', text: block }] } };
+    const out = redactTranscript(`${JSON.stringify(meta)}\n${JSON.stringify(blob)}\n`, [], [], KEY).text;
+    expect(out).not.toContain(ADDRESS);
   });
 });
