@@ -606,6 +606,10 @@ export const vocabularyAhead = ({ status, body }: Reply): CliError | undefined =
   return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_ahead', title, status: 409 });
 };
 
+/** The pool's refusal of one batch for its size or its parts (400 `bad_part`, 413 `too_large`): another batch can still be taken, so a run goes on past it. Every other refusal is about the sender or the pool, and ends the run. */
+export const isBatchRefusal = (error: unknown): error is CliError =>
+  error instanceof CliError && ((error.problem.status === 400 && error.problem.code === 'bad_part') || (error.problem.status === 413 && error.problem.code === 'too_large'));
+
 const lockMessages: { [code in LockRefusal]: string } = {
   batch_unknown: 'No batch with that hash is in the outbox. Run oars pool outbox to list them.',
   batch_not_shown: 'That batch was never printed. Run oars pool outbox, read it, then send it.',
@@ -749,7 +753,8 @@ const PROGRESS_EVERY = 100;
 /**
  * `deposit --send-all`: the lock and the covenant of `--send`, once, then every batch of the outbox in name order, one file read at a time. A batch whose hash `sent.log` holds is not sent again, which is what makes a rerun send only what is left (the log is
  * written after each batch, so a run that stops loses at most the one in flight, and the pool reads a batch sent again as the same deposit). A batch that `oars pool outbox` never printed, that changed on disk, or that a pulled-batch rule holds back is skipped and counted.
- * The first batch that fails ends the run: the counts print, and the error goes up with its own exit code. Only counts and hashes print, never a session's content.
+ * The first batch that fails ends the run: the counts print, and the error goes up with its own exit code. A batch the pool refuses for its size or its parts (`isBatchRefusal`) is the one exception: it stays in the outbox, unsent and not logged,
+ * and is counted as refused, and the run goes on to the next batch; the run still ends with an error, so the exit code is non-zero. Only counts and hashes print, never a session's content.
  */
 const sendAll = async (deps: RunDeps, options: { outbox: string; server: string; token: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined; lock: SendLock | undefined; pause: Pause | undefined }): Promise<Outcome> => {
   const { outbox, server, token } = options;
@@ -770,9 +775,13 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
         return 'run oars pool deposit --send <hash> at a terminal to read it and accept';
       };
       await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal, oneBatch, true);
-      const tally = { sent: 0, skipped: 0, alreadySent: 0, failed: 0, left: 0 };
+      const tally = { sent: 0, skipped: 0, alreadySent: 0, failed: 0, left: 0, refused: 0 };
       const handled = new Set<string>();
-      const line = (): string => `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left`;
+      // The refused count shows only when there was one, so a run with none reads as it always has.
+      const line = (): string =>
+        `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left${tally.refused === 0 ? '' : `, ${String(tally.refused)} refused for size and kept in the outbox`}`;
+      // The first refusal of a batch: the run's own error when nothing else ended it.
+      let firstRefusal: CliError | undefined;
       let ended: { error: unknown } | undefined;
       try {
         for await (const named of namesHeldAcross(outbox)) {
@@ -785,17 +794,26 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
             if (bytes === undefined) {
               tally.skipped += 1;
             } else {
+              let taken = true;
               try {
                 await postBatch(deps, { server, token, bytes, hash: named.hash, via });
               } catch (error) {
-                tally.failed = 1;
-                throw error;
+                // A batch the pool will never take stays where it is, unlogged and not asked again this run; the batches after it still go.
+                if (!isBatchRefusal(error)) {
+                  tally.failed = 1;
+                  throw error;
+                }
+                tally.refused += 1;
+                firstRefusal ??= error;
+                taken = false;
               }
-              await markSent(outbox, named.hash, deps.now());
-              tally.sent += 1;
+              if (taken) {
+                await markSent(outbox, named.hash, deps.now());
+                tally.sent += 1;
+              }
             }
           }
-          const count = tally.sent + tally.skipped + tally.alreadySent;
+          const count = tally.sent + tally.skipped + tally.alreadySent + tally.refused;
           if (count % PROGRESS_EVERY === 0) deps.io.stderr(`${String(count)} batches handled: ${line()}.
 `);
         }
@@ -818,6 +836,12 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
         // The counts reach the --json failure document too, not only stderr.
         if (ended.error instanceof CliError) throw new CliError(ended.error.message, ended.error.exitCode, ended.error.step, ended.error.problem, { ...ended.error.details, tally });
         throw ended.error;
+      }
+      // Every batch was handled, but the pool took none of the refused ones: the run says so and exits with the pool's refusal, so a script and a person both see it.
+      if (firstRefusal !== undefined) {
+        deps.io.stderr(`Finished: ${line()}. A refused batch stays in the outbox and is not sent again by this command.
+`);
+        throw new CliError(firstRefusal.message, firstRefusal.exitCode, firstRefusal.step, firstRefusal.problem, { tally });
       }
       return { document: { ok: true, server, ...tally }, text: `Done: ${line()}.` };
     }, options.lock?.times, options.lock?.fs, {

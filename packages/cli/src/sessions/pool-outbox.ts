@@ -5,7 +5,7 @@ import { readdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
-import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
+import { MAX_ASSEMBLED_BYTES, MAX_PARTS, PART_BYTES, SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
 /** What `JSON.stringify` writes for a value, or undefined for one JSON cannot hold (the lib types call this a string always). */
@@ -29,8 +29,7 @@ const canonical = (value: unknown): string => {
 /** The batch as one canonical JSON line: sorted keys, no optional whitespace, UTF-8 when written, and a newline at the end. These are the bytes that are hashed, printed, and sent. */
 export const canonicalBytes = (batch: unknown): string => `${canonical(batch)}\n`;
 
-/** The most bytes one request of a deposit carries. The pool refuses a request past 1 MiB, so a batch past this goes in parts, each of them under that cap. */
-export const PART_BYTES = 512 * 1024;
+export { PART_BYTES };
 
 /**
  * The batch cut into parts of at most `limit` UTF-8 bytes, never inside a character, so the parts join back to exactly the bytes that were hashed. A batch within the limit is one part.
@@ -51,6 +50,22 @@ export const partsOf = (bytes: string, limit: number = PART_BYTES): string[] => 
   }
   parts.push(part);
   return parts;
+};
+
+/** The limits a deposit is held to; a test passes its own to reach a limit the real ones cannot show apart. */
+interface DepositLimits {
+  partBytes: number;
+  maxParts: number;
+  maxBytes: number;
+}
+
+/**
+ * Whether the pool would refuse this batch whole, whatever the send: past `maxBytes` assembled it answers 413 `too_large`, and past `maxParts` parts 400 `bad_part` (`receivePart` in the pool). `bytes` is the batch as `canonicalBytes` wrote it.
+ * The size is read first, since it needs no cutting. With the shared limits a batch past the parts cap is past the size cap too, so `parts` is what a smaller part size or a wider byte cap would show.
+ */
+export const overDepositLimit = (bytes: string, limits: DepositLimits = { partBytes: PART_BYTES, maxParts: MAX_PARTS, maxBytes: MAX_ASSEMBLED_BYTES }): 'bytes' | 'parts' | undefined => {
+  if (Buffer.byteLength(bytes, 'utf8') > limits.maxBytes) return 'bytes';
+  return partsOf(bytes, limits.partBytes).length > limits.maxParts ? 'parts' : undefined;
 };
 
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');

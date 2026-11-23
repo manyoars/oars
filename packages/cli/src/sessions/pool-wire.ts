@@ -43,6 +43,14 @@ export const FORMAT_7_TOOL_FIELDS = ['digests'] as const;
  */
 export const FIELD_LIST_VERSION = 14;
 export const BUNDLE_FORMAT = 1;
+
+// The limits of a deposit, defined once for the client and the pool (t1582): the pool refuses a batch past them (`receivePart` in `packages/pool/src/parts.ts`), and the client keeps a session that would pass them out of the outbox. Moving one value here moves both.
+/** The most bytes one request of a deposit carries. The pool refuses a request past 1 MiB, so a batch past this goes in parts, each of them under that cap. */
+export const PART_BYTES = 512 * 1024;
+/** How many parts one batch may have. The client sends parts of `PART_BYTES`, so the join cap needs 4 at most; 8 leaves room for a smaller part size. */
+export const MAX_PARTS = 8;
+/** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the stored skeleton shares the row with its other columns. A batch past this is refused whole, whatever its parts. */
+export const MAX_ASSEMBLED_BYTES = 1_800_000;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
 

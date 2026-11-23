@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
 import { CliError } from '../errors.js';
 import { machineOf } from './machine.js';
-import { ask, currentTerms, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
+import { ask, currentTerms, DEPOSIT, isBatchRefusal, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
 import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
@@ -23,6 +23,8 @@ export interface NightlyPool {
   raw: number;
   /** Pulled batches the pool refused for its closed vocabulary or its format this night: each stays in the outbox, unsent, and is asked again the next night. Set only when there were some. */
   refused?: number;
+  /** Batches the pool refused for their size or their parts this night (400 `bad_part`, 413 `too_large`): each stays in the outbox, unsent, and the night went on to the next batch. Set only when there were some. */
+  oversize?: number;
   /** Pulled batches removed this night because they now hold a term of the exclusion file. Set only when there were some. */
   removed?: number;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
@@ -88,6 +90,11 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
           // A pulled batch cannot be rebuilt (its raw is gone), and one the pool no longer reads must not stop the batches after it on every night: it stays, unsent and unmarked, and the note counts it.
           if (batch.pulled && isVocabularyRefusal(error)) {
             tally.refused = (tally.refused ?? 0) + 1;
+            continue;
+          }
+          // A batch past the pool's size or part limit is refused on every night, and in name order it would end every night at the same file: it stays, unsent and unmarked, is counted, and the batches after it go.
+          if (isBatchRefusal(error)) {
+            tally.oversize = (tally.oversize ?? 0) + 1;
             continue;
           }
           throw error;

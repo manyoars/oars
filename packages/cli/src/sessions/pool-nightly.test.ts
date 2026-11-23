@@ -13,6 +13,7 @@ import type { Outgoing } from './pool-print.js';
 import { batchHash, heldAcross, outboxFolder } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock, type LockFs } from './pool-send-lock.js';
+import { sentHashes } from './pool-sent.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -716,5 +717,58 @@ describe('withSendLock', () => {
     await expect(withSendLock(outbox, () => Promise.resolve('ran'), { staleMs: 1000, waitMs: 30, pollMs: 5 }, seen)).rejects.toBeInstanceOf(SendLockBusy);
     expect(readFileSync(lock, 'utf8')).toBe('live-run');
     expect(readdirSync(outbox)).toEqual(['send.lock']);
+  });
+});
+
+describe('the nightly send past a batch the pool refuses for its size (t1582)', () => {
+  const built = async (): Promise<{ here: Scene; outbox: string; hashes: string[] }> => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const hashes = (await heldAcross(outbox)).batches.map((batch) => batch.hash);
+    expect(hashes.length).toBeGreaterThan(1);
+    return { here, outbox, hashes };
+  };
+  /** A pool that answers `refusal` to the batch named and 201 to every other, recording each posted hash. */
+  const refusing = (refused: string, refusal: Reply): { posted: string[]; via: Sender } => {
+    const posted: string[] = [];
+    return {
+      posted,
+      via: (request) => {
+        if (request.method === 'GET') return Promise.resolve(OPEN);
+        const hash = batchHash(request.body ?? '');
+        posted.push(hash);
+        return Promise.resolve(hash === refused ? refusal : answer(201, { ok: true }));
+      },
+    };
+  };
+
+  it.each([
+    ['bad_part', answer(400, { error: 'bad_part', message: 'oars-part is n/m with 1 <= n <= m <= 8.' })],
+    ['too_large', answer(413, { error: 'too_large', message: 'A deposit holds at most 1800000 bytes, in parts or whole.' })],
+  ])('goes on past a %s batch, sends the rest, keeps the refused one unsent, and counts it in the night\'s note', async (_code, refusal) => {
+    const { here, outbox, hashes } = await built();
+    const first = hashes[0] ?? '';
+    const pool = refusing(first, refusal);
+    const night = await nightlyPoolSend(here.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', batches: hashes.length - 1, oversize: 1 });
+    expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ oversize: 1 });
+    expect(pool.posted.sort()).toEqual([...hashes].sort());
+    expect([...(await sentHashes(outbox))].sort()).toEqual(hashes.slice(1).sort());
+    // The next night asks for the refused batch once and nothing else.
+    const again = refusing(first, refusal);
+    expect(await nightlyPoolSend(here.deps, again.via)).toMatchObject({ outcome: 'sent', batches: 0, oversize: 1 });
+    expect(again.posted).toEqual([first]);
+  });
+
+  it.each([
+    ['401', answer(401, { error: 'unauthorized', message: 'Sign in again.' })],
+    ['503', answer(503, { error: 'down', message: 'down' })],
+    ['409 vocabulary_ahead', answer(409, { error: 'vocabulary_ahead', message: 'later' })],
+  ])('still ends the night at a %s on a batch', async (_name, refusal) => {
+    const { here, outbox, hashes } = await built();
+    const pool = refusing(hashes[0] ?? '', refusal);
+    expect(await nightlyPoolSend(here.deps, pool.via)).toMatchObject({ outcome: 'failed', batches: 0 });
+    expect((await sentHashes(outbox)).size).toBe(0);
   });
 });

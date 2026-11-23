@@ -1,11 +1,10 @@
 // A deposit past the request cap arrives in parts, each under it, and the server keeps them as one deposit (t880). The parts wait in `deposit_parts`; the last to arrive completes the batch, and the join is stored by the same path as a deposit sent whole.
+import { MAX_ASSEMBLED_BYTES, MAX_PARTS } from '../../cli/src/sessions/pool-wire.js';
 import type { HashKey } from './ingest-hash.js';
 import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
 
-/** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the stored skeleton shares the row with its other columns. A batch past this is refused whole, whatever its parts. */
-export const MAX_ASSEMBLED_BYTES = 1_800_000;
-/** How many parts one batch may have. The client sends parts of 512 KiB, so the join cap needs 4 at most; 8 leaves room for a smaller part size. */
-const MAX_PARTS = 8;
+// The two limits of a deposit are defined in the wire contract, so the client that keeps a session out for size and this refusal read one value (t1582).
+export { MAX_ASSEMBLED_BYTES };
 
 /**
  * How many unfinished batches one account may stage at once. The CLI sends a batch's parts in order under a send lock, so one machine has one batch unfinished at a time and a batch is at most 4 parts (the join cap over 512 KiB parts); 16 leaves

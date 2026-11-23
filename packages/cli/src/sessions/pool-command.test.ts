@@ -4573,6 +4573,86 @@ describe('oars pool deposit --send-all (t1199)', () => {
     expect(sentLogOf(scene)).toEqual([...hashes]);
   });
 
+  describe('a refusal that belongs to one batch (t1582)', () => {
+    const refusedPool = (refused: Set<string>, refusal: Reply): { landed: string[]; via: Sender } => {
+      const landed: string[] = [];
+      const via: Sender = (request) => {
+        if (request.method === 'GET') return Promise.resolve(OPEN_COVENANT);
+        const hash = batchHash(request.body ?? '');
+        if (refused.has(hash)) return Promise.resolve(refusal);
+        landed.push(hash);
+        return Promise.resolve(answer(201));
+      };
+      return { landed, via };
+    };
+    const BAD_PART = answer(400, { error: 'bad_part', message: 'oars-part is n/m with 1 <= n <= m <= 8.' });
+    const TOO_LARGE = answer(413, { error: 'too_large', message: 'A deposit holds at most 1800000 bytes, in parts or whole.' });
+
+    it.each([['bad_part', BAD_PART], ['too_large', TOO_LARGE]])('goes on to the next batch after a %s refusal, sends the third, keeps the second unsent, and still ends non-zero with the counts', async (_code, refusal) => {
+      const scene = await clean();
+      const hashes = plant(scene, 1, 3);
+      await show(scene);
+      const pool = refusedPool(new Set([hashes[1] ?? '']), refusal);
+      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status: refusal.status, code: refusal.body && Reflect.get(refusal.body, 'error') }, details: { tally: { sent: 2, refused: 1, failed: 0, left: 0 } } });
+      expect(pool.landed).toEqual([hashes[0], hashes[2]]);
+      expect(sentLogOf(scene)).toEqual([hashes[0], hashes[2]]);
+      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for size and kept in the outbox.');
+      expect(scene.h.err.join('') + scene.h.out.join('')).not.toContain('zorblax-session-content');
+    });
+
+    it('exits non-zero from the command line when a batch was refused, after sending the rest, and prints the summary line', async () => {
+      const scene = await clean();
+      plant(scene, 1, 3);
+      await show(scene);
+      on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
+      let posts = 0;
+      on(scene, 'post', '/v1/deposits', () => {
+        posts += 1;
+        return posts === 2 ? HttpResponse.json({ error: 'too_large', message: 'A deposit holds at most 1800000 bytes, in parts or whole.' }, { status: 413 }) : HttpResponse.json({ ok: true }, { status: 201 });
+      });
+      expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send-all')).not.toBe(ExitCode.OK);
+      expect(posts).toBe(3);
+      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for size and kept in the outbox.');
+      expect(sentLogOf(scene)).toHaveLength(2);
+    });
+
+    it('does not ask again for the refused batch within the run, and a rerun asks for it once and sends nothing else', async () => {
+      const scene = await clean();
+      const hashes = plant(scene, 1, 3);
+      await show(scene);
+      const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(201), TOO_LARGE, answer(201)] });
+      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ details: { tally: { sent: 2, refused: 1 } } });
+      expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+      const again = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': TOO_LARGE });
+      await expect(poolDeposit(scene.h.deps, all(again.via))).rejects.toMatchObject({ details: { tally: { sent: 0, refused: 1, alreadySent: 2 } } });
+      expect(again.requests.filter((request) => request.method === 'POST').map((request) => batchHash(request.body ?? ''))).toEqual([hashes[1]]);
+    });
+
+    it.each([
+      ['401', answer(401, { error: 'unauthorized', message: 'Sign in again.' })],
+      ['503', answer(503, { error: 'down', message: 'down' })],
+      ['409 vocabulary_ahead', answer(409, { error: 'vocabulary_ahead', message: 'later' })],
+      ['400 bad_batch', answer(400, { error: 'bad_batch', message: 'The pool refused this batch.' })],
+    ])('still stops the run at a %s on the second batch', async (_name, refusal) => {
+      const scene = await clean();
+      const hashes = plant(scene, 1, 3);
+      await show(scene);
+      const pool = refusedPool(new Set([hashes[1] ?? '']), refusal);
+      await expect(poolDeposit(scene.h.deps, all(pool.via, { pause: () => Promise.resolve() }))).rejects.toMatchObject({ details: { tally: { sent: 1, refused: 0, failed: 1, left: 1 } } });
+      expect(pool.landed).toEqual([hashes[0]]);
+    });
+
+    it('stops with the stop error, counting what was refused before it', async () => {
+      const scene = await clean();
+      const hashes = plant(scene, 1, 4);
+      await show(scene);
+      const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(201), TOO_LARGE, answer(401, { error: 'unauthorized', message: 'Sign in again.' })] });
+      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status: 401 }, details: { tally: { sent: 1, refused: 1, failed: 1, left: 1 } } });
+      expect(scene.h.err.join('')).toContain('Stopped: 1 sent, 0 skipped, 0 already sent, 1 failed, 1 left, 1 refused for size and kept in the outbox.');
+      expect(sentLogOf(scene)).toEqual([hashes[0]]);
+    });
+  });
+
   it('does not count a pulled batch held back for want of exclusion terms as left, since a rerun skips it', async () => {
     const scene = await clean();
     const hashes = plant(scene, 1, 3);
