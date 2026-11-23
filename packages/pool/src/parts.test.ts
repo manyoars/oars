@@ -362,6 +362,76 @@ describe('a deposit past the request cap', () => {
   }, 120_000);
 });
 
+/** The assembled cap and part count the pool takes (t1583): 8 MiB in 16 parts of 512 KiB, past the old 1,800,000 bytes and 8 parts. */
+const JOIN_CAP = 8 * 1024 * 1024;
+const JOIN_PARTS = 16;
+/** What D1 holds in one stored value. */
+const D1_VALUE_BYTES = 2_000_000;
+
+/** The canonical bytes of a `bigSkeleton` just within `limit`: a call is a few hundred bytes, so the count is scaled from one measure and then stepped down. */
+const bigWithin = (id: string, limit: number): string => {
+  const bytes = (text: string): number => new TextEncoder().encode(text).length;
+  let calls = Math.floor((1000 * limit) / bytes(canonicalBytes(bigSkeleton(id, 1000))));
+  let text = canonicalBytes(bigSkeleton(id, calls));
+  while (bytes(text) > limit) text = canonicalBytes(bigSkeleton(id, (calls -= 1)));
+  return text;
+};
+
+/** The skeleton a deposit row holds, read back whole: the row's own text, then each stored piece in order. */
+const storedSkeleton = async (pool: TestPool, account: string, id: string): Promise<string> => {
+  const db = await pool.db();
+  const first = await db.prepare('SELECT skeleton FROM deposits WHERE account = ? AND id = ?').bind(account, id).first('skeleton');
+  const { results } = await db.prepare('SELECT body FROM deposit_skeleton_rows WHERE account = ? AND id = ? ORDER BY piece').bind(account, id).all();
+  return `${typeof first === 'string' ? first : ''}${results.map(bodyText).join('')}`;
+};
+
+/** The account id a signed-in token deposits as. */
+const accountOf = async (pool: TestPool): Promise<string> => textOf(await (await pool.db()).prepare('SELECT account FROM deposits').first(), 'account');
+
+describe('a skeleton past one stored row (t1583)', () => {
+  it('joins a batch of the cap in its parts, stores it across rows each within what D1 holds, and reads it back byte for byte', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9101');
+      const whole = bigWithin('0000000000001583', JOIN_CAP);
+      expect(new TextEncoder().encode(whole).length).toBeGreaterThan(JOIN_CAP - 64 * 1024);
+      const parts = partsOf(whole);
+      expect(parts).toHaveLength(JOIN_PARTS);
+      const batch = sha(whole);
+      const answers: Answer[] = [];
+      for (const [at, part] of parts.entries()) answers.push(await pool.post('/v1/deposits', part, token, partHeaders(batch, at + 1, parts.length)));
+      expect(answers.at(-1)).toMatchObject({ status: 201, json: { ok: true, id: '0000000000001583' } });
+      const parsed = parseSkeleton(JSON.parse(whole));
+      if (!parsed.ok) throw new Error('the fixture does not parse');
+      expect(await storedSkeleton(pool, await accountOf(pool), '0000000000001583')).toBe(JSON.stringify(parsed.skeleton));
+      const db = await pool.db();
+      expect(await db.prepare('SELECT MAX(LENGTH(CAST(skeleton AS BLOB))) AS most FROM deposits').first('most')).toBeLessThanOrEqual(D1_VALUE_BYTES);
+      expect(await db.prepare('SELECT MAX(LENGTH(CAST(body AS BLOB))) AS most FROM deposit_skeleton_rows').first('most')).toBeLessThanOrEqual(D1_VALUE_BYTES);
+    } finally {
+      await pool.dispose();
+    }
+  }, 600_000);
+
+  it('joins a batch of more parts than the old cap of 8, and reads it back byte for byte', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9102');
+      const whole = canonicalBytes(bigSkeleton('0000000000001584', BIG_CALLS));
+      const parts = partsOf(whole, Math.ceil(new TextEncoder().encode(whole).length / 9));
+      expect(parts).toHaveLength(9);
+      const batch = sha(whole);
+      const answers: Answer[] = [];
+      for (const [at, part] of parts.entries()) answers.push(await pool.post('/v1/deposits', part, token, partHeaders(batch, at + 1, parts.length)));
+      expect(answers.at(-1)).toMatchObject({ status: 201, json: { ok: true, id: '0000000000001584' } });
+      const parsed = parseSkeleton(JSON.parse(whole));
+      if (!parsed.ok) throw new Error('the fixture does not parse');
+      expect(await storedSkeleton(pool, await accountOf(pool), '0000000000001584')).toBe(JSON.stringify(parsed.skeleton));
+    } finally {
+      await pool.dispose();
+    }
+  }, 300_000);
+});
+
 describe('staging is bounded (S12, t958)', () => {
   const stage = (pool: TestPool, token: string, batch: string, index = 1, count = 2): Promise<Answer> => pool.post('/v1/deposits', 'x', token, partHeaders(batch, index, count));
   const batchOf = (n: number): string => sha(`unfinished batch ${String(n)}`);
