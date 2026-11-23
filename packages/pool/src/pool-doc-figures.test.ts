@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BIG_CALLS, bigSkeleton, COVERAGE_KEY, coverageBytesSkeleton, envelopeBytes, LARGE_STEPS, largeSkeleton, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, PART_BYTES } from '../../cli/src/sessions/pool-outbox.js';
-import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { MAX_PARTS, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { incrementsOf } from './ingest.js';
 import { MAX_ASSEMBLED_BYTES } from './parts.js';
 import { sampleSkeleton } from './sample.js';
@@ -73,6 +73,7 @@ const figures = async () => {
     'large-steps': LARGE_STEPS,
     'big-calls': BIG_CALLS,
     'join-limit': MAX_ASSEMBLED_BYTES,
+    'max-parts': MAX_PARTS,
     'join-parts': Math.ceil(MAX_ASSEMBLED_BYTES / PART_BYTES),
     skeleton,
     cells: cells.size,
