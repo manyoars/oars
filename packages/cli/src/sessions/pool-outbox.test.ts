@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, removeBatchesExcept, writeBatch } from './pool-outbox.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, overDepositLimit, removeBatchesExcept, writeBatch } from './pool-outbox.js';
 import { VOCAB_VERSION } from './public-vocabulary.js';
-import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
+import { FIELD_LIST_VERSION, MAX_ASSEMBLED_BYTES, MAX_PARTS, PART_BYTES, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -187,5 +187,39 @@ describe('removeBatchesExcept with a reader', () => {
     });
     expect(removed).toBe(1);
     expect(readdirSync(folder)).toEqual([late]);
+  });
+});
+
+describe('overDepositLimit: the batch the pool would refuse whole (t1582)', () => {
+  it('reads the limits from the wire contract the pool reads', () => {
+    expect([PART_BYTES, MAX_PARTS, MAX_ASSEMBLED_BYTES]).toEqual([512 * 1024, 8, 1_800_000]);
+  });
+
+  it('takes a batch of exactly the assembled limit, and refuses one byte over', () => {
+    expect(overDepositLimit('a'.repeat(MAX_ASSEMBLED_BYTES))).toBeUndefined();
+    expect(overDepositLimit('a'.repeat(MAX_ASSEMBLED_BYTES + 1))).toBe('bytes');
+  });
+
+  it('counts bytes, not characters', () => {
+    // Each of these is three bytes: 600,000 of them are 1,800,000 bytes, and one more is over.
+    expect(overDepositLimit('€'.repeat(MAX_ASSEMBLED_BYTES / 3))).toBeUndefined();
+    expect(overDepositLimit('€'.repeat(MAX_ASSEMBLED_BYTES / 3 + 1))).toBe('bytes');
+  });
+
+  it('takes a batch of exactly the part limit and refuses one part over, whatever the byte cap', () => {
+    const limits = { partBytes: 10, maxParts: 3, maxBytes: 1000 };
+    expect(overDepositLimit('a'.repeat(30), limits)).toBeUndefined();
+    expect(overDepositLimit('a'.repeat(31), limits)).toBe('parts');
+  });
+
+  it('cuts parts at character boundaries, so a character that does not fit starts the next part', () => {
+    // Two-byte characters in parts of 5 bytes hold two each: seven of them take four parts, not the three that 14 bytes over 5 would suggest.
+    const limits = { partBytes: 5, maxParts: 3, maxBytes: 1000 };
+    expect(overDepositLimit('é'.repeat(6), limits)).toBeUndefined();
+    expect(overDepositLimit('é'.repeat(7), limits)).toBe('parts');
+  });
+
+  it('with the real limits, the part cap is never reached before the size cap', () => {
+    expect(Math.ceil(MAX_ASSEMBLED_BYTES / PART_BYTES)).toBeLessThanOrEqual(MAX_PARTS);
   });
 });

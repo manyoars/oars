@@ -13,10 +13,10 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeldAcross, shownHashes, wasShown, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
+import { canonicalBytes, discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeldAcross, shownHashes, wasShown, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, overDepositLimit, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type WireGate } from './pool-wire.js';
+import { HARNESSES, hasEnded, MAX_ASSEMBLED_BYTES, MAX_PARTS, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type WireGate } from './pool-wire.js';
 import { keepCrewNumber } from './crew-mark.js';
 import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -581,6 +581,8 @@ interface DepositCounts {
   /** Refused by the vocabulary here; the count of those and which fields, never a value. */
   refused: number;
   refusedFields: string[];
+  /** Sessions kept out for size: their batch is past the part count or assembled size the pool takes (`overDepositLimit`), so none is written. Counted only; they stay on this machine. */
+  oversize: number;
   /** Batches built under an older vocabulary, field list, or skeleton format, removed from the outbox. */
   discarded: number;
   /** Batches of an earlier pass whose session no longer passes (a gate, the allowlist, a refusal) or is gone from the store, removed so the outbox holds only what this pass built. */
@@ -1005,7 +1007,7 @@ export const poolDeposit = async (
   const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;
   const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, removedByPerson: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, removedByPerson: 0, notEnded: 0, refused: 0, refusedFields: [], oversize: 0, discarded, withdrawn: 0 };
   // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
   const termList = await loadTerms(terms);
   const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: termList };
@@ -1132,6 +1134,12 @@ export const poolDeposit = async (
         await withdraw(key);
         continue;
       }
+      // The pool refuses a batch past its assembled-size or part limit whole, so none is written: it stays local, is counted by number only, and an earlier batch of it goes. The next pass looks again, so a pool that takes more lets it through.
+      if (overDepositLimit(canonicalBytes(parsed.skeleton)) !== undefined) {
+        counts.oversize += 1;
+        await withdraw(key);
+        continue;
+      }
       // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
       if (machine !== undefined) await noteMachineKey(outbox, key);
       builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
@@ -1169,6 +1177,7 @@ export const poolDeposit = async (
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. ${machine === undefined ? SENT_LATER : 'Nothing was sent.'}`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
+    ...(counts.oversize === 0 ? [] : [`${String(counts.oversize)} ${counts.oversize === 1 ? 'session' : 'sessions'} kept out for size: the batch would be past the ${String(MAX_ASSEMBLED_BYTES)} bytes or ${String(MAX_PARTS)} parts the pool takes. They stay on this machine and nothing of them is queued.`]),
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),

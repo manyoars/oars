@@ -36,13 +36,26 @@ import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
+// A test sets `limit.bytes` to reach the assembled-size limit with a small batch: the client reads the limit from this module (t1582), so the mock below hands it that value while it is set.
+const limit = vi.hoisted(() => ({ bytes: undefined as number | undefined }));
 vi.mock('./pool-wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof PoolWire>();
   // The memory proof's child must not keep a record of every call's arguments (a spy holds the whole session and batch it saw, about 33 KB a session), so there it runs the real function.
-  return process.env.OARS_SEND_ALL_MEMORY_CHILD === undefined ? { ...actual, skeletonOf: vi.fn(actual.skeletonOf) } : actual;
+  return process.env.OARS_SEND_ALL_MEMORY_CHILD === undefined
+    ? {
+        ...actual,
+        skeletonOf: vi.fn(actual.skeletonOf),
+        get MAX_ASSEMBLED_BYTES(): number {
+          return limit.bytes ?? actual.MAX_ASSEMBLED_BYTES;
+        },
+      }
+    : actual;
 });
 
 useServer();
+afterEach(() => {
+  limit.bytes = undefined;
+});
 afterEach(cleanup);
 
 const POOL = 'https://pool.test';
@@ -1025,6 +1038,46 @@ describe('oars pool deposit', () => {
       scene.h.out.length = 0;
       expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
       expect(scene.h.out.join('')).not.toContain('No exclusion terms file');
+    });
+
+    describe('a session whose batch the pool could not take is kept out for size (t1582)', () => {
+      /** The size of the one batch a plain session builds, read from the outbox, so a test can set the limit to the byte. */
+      const plainSize = async (): Promise<number> => {
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        return statSync(join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'), { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl'))[0] ?? '')).size;
+      };
+
+      it('writes a batch of exactly the limit', async () => {
+        limit.bytes = await plainSize();
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(scene.document()).toMatchObject({ batched: 1, oversize: 0 });
+        expect(outboxFiles(scene)).toHaveLength(1);
+      });
+
+      it('keeps out a batch one byte over, writes nothing of it, says how many by count only, and removes an earlier batch of it', async () => {
+        const size = await plainSize();
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toHaveLength(1);
+        limit.bytes = size - 1;
+        scene.h.out.length = 0;
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(scene.document()).toMatchObject({ batched: 0, oversize: 1, withdrawn: 1 });
+        expect(outboxFiles(scene)).toEqual([]);
+        scene.h.out.length = 0;
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        const text = scene.h.out.join('');
+        expect(text).toContain(`1 session kept out for size: the batch would be past the ${String(size - 1)} bytes or 8 parts the pool takes. They stay on this machine and nothing of them is queued.`);
+        expect(text).not.toContain('a plain request');
+      });
+
+      it('says nothing about size when no session is past the limit', async () => {
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(scene.h.out.join('')).not.toContain('kept out for size');
+      });
     });
 
     describe('a session that passed once and fails a gate later leaves the outbox', () => {

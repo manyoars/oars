@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- The deposit limits (`MAX_PARTS`, `MAX_ASSEMBLED_BYTES`, and the client's `PART_BYTES`) are now defined once, in `packages/cli/src/sessions/pool-wire.ts`, and `parts.ts` reads them from there, so the client and the pool cannot drift. No value changed: a batch is refused with 400 `bad_part` past 8 parts and 413 `too_large` past 1,800,000 bytes, as before.
+
 - The pool reads vocabulary 3 and vocabulary 2: `GET /bundle/:harness/:harnessVersion/:vocabVersion` serves either one, stating the version asked for in the bundle and its ETag, and answers 400 `unknown_vocab_version` for any other. `POST /v1/deposits` refuses a batch built under a later vocabulary than the pool reads with 409 `vocabulary_ahead` (field `vocabVersion`), before reading it, and still takes vocabulary 3 and every earlier one. A deposit under a vocabulary earlier than the ones it reads (`READ_VOCAB_VERSIONS`) is still stored and read with the current lists, not with its own.
 - `GET /v1/operator/fetches` takes `lot=<id>` (only that lot's rows) and `limit` (1 to 100, default 100) beside `cursor`; an empty `lot` or a bad `limit` is 400. `fulfil` ends the run, printing what failed and its counts, exit 1, when the queue cannot be read again after a build; the pack-fetches cursor test no longer leaves its 105 queued rows behind.
 - `GET /v1/operator/fetches` returns each row's `lot` and pages with an opaque `cursor`/`nextCursor` (ordered by `createdAt`, then `fetchId`; 400 for a cursor that does not decode); `fulfil` builds from the route's lot, follows `nextCursor` until the queue is read, counts a fetch that left the queue during its build as `gone` (not a failure), and leaves only that fetch queued when its queue recheck or build folder fails.
