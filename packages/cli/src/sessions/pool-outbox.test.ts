@@ -201,9 +201,9 @@ describe('overDepositLimit: the batch the pool would refuse whole (t1582)', () =
   });
 
   it('counts bytes, not characters', () => {
-    // Each of these is three bytes: 600,000 of them are 1,800,000 bytes, and one more is over.
-    expect(overDepositLimit('€'.repeat(MAX_ASSEMBLED_BYTES / 3))).toBeUndefined();
-    expect(overDepositLimit('€'.repeat(MAX_ASSEMBLED_BYTES / 3 + 1))).toBe('bytes');
+    // Each of these is three bytes. As many as the parts hold pass (a part is never cut inside a character, so a part holds a whole number of them), and a third of the limit and one more is over in bytes, though far under it in characters.
+    expect(overDepositLimit('€'.repeat(Math.floor(PART_BYTES / 3) * MAX_PARTS))).toBeUndefined();
+    expect(overDepositLimit('€'.repeat(Math.floor(MAX_ASSEMBLED_BYTES / 3) + 1))).toBe('bytes');
   });
 
   it('takes a batch of exactly the part limit and refuses one part over, whatever the byte cap', () => {

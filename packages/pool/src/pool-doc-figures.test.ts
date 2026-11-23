@@ -93,7 +93,7 @@ const figures = async () => {
     sample,
     'per-call': perCall,
     big,
-    'row-calls': MAX_ASSEMBLED_BYTES / perCall,
+    'join-calls': MAX_ASSEMBLED_BYTES / perCall,
     'sample-sessions': 10_000_000_000 / sample,
   };
 };
