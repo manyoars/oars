@@ -126,7 +126,7 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   )
     .bind(account, batch, part, count, await seal(key, body), Date.now(), account, batch, account, batch, MAX_STAGED_BATCHES)
     .run();
-  let held = await heldParts(env, account, batch);
+  const held = await heldParts(env, account, batch);
   // Nothing was written and this part is not already held: the cap refused it.
   if (inserted.meta.changes === 0 && !held.some((row) => row.part === part)) {
     return refuse(429, 'staging_full', `An account may hold ${String(MAX_STAGED_BATCHES)} unfinished batches at once. Finish them, or wait: an unfinished batch is dropped after 24 hours.`, 'oars-batch', { 'retry-after': String(STAGED_MAX_AGE_MS / 1000) });
@@ -139,7 +139,7 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
   // The join opens every part; one that does not open (a changed byte, another key) is a batch that is not the one named.
   const whole = await joined(key, held, batch);
-  held = [];
+  held.length = 0;
   if (whole === null) {
     await forget(env, account, batch);
     return refuse(400, 'part_mismatch', 'The parts do not join to the batch that oars-batch names. Send every part again.', 'oars-batch');

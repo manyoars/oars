@@ -487,7 +487,7 @@ describe('main: the find', () => {
 describe('main: the deposit find', () => {
   const NAME = 'Jane Quentin Tenant';
   const held = (sql: string): unknown[] => {
-    if (sql.startsWith('SELECT account, id, skeleton, extensions, counted_at FROM deposits')) return [{ account: ACCOUNT, id: 'sess-1', skeleton: `{"note":"${NAME}"}`, extensions: '[]', counted_at: Date.parse('2026-11-03T10:00:00Z') }, { account: ACCOUNT, id: 'sess-2', skeleton: '{}', extensions: '[]', counted_at: null }];
+    if (sql.startsWith('SELECT account, id, skeleton, extensions, counted_at, EXISTS')) return [{ account: ACCOUNT, id: 'sess-1', skeleton: `{"note":"${NAME}"}`, extensions: '[]', counted_at: Date.parse('2026-11-03T10:00:00Z'), split: 0 }, { account: ACCOUNT, id: 'sess-2', skeleton: '{}', extensions: '[]', counted_at: null, split: 0 }];
     if (sql.startsWith('SELECT motif_id, motif FROM motifs')) return [{ motif_id: 'm1', motif: `{"program":"${NAME}"}` }];
     if (sql.startsWith('SELECT rowid, key, harness_bucket, frame_bucket')) return [{ rowid: 1, key: `cell/${NAME}/x`, harness_bucket: 'h', frame_bucket: 'f', motif_id: 'm1' }];
     if (sql.startsWith('SELECT kind, key, account, day FROM contributors')) return [{ kind: 'cell', key: `cell/${NAME}/x`, account: ACCOUNT, day: '2026-11-03' }];
