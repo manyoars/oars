@@ -7,8 +7,8 @@ import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js'
 export { MAX_ASSEMBLED_BYTES };
 
 /**
- * How many unfinished batches one account may stage at once. The CLI sends a batch's parts in order under a send lock, so one machine has one batch unfinished at a time and a batch is at most 4 parts (the join cap over 512 KiB parts); 16 leaves
- * room for the same account on several machines, each with an interrupted batch. At the cap an account stages at most 16 x 1,800,000 bytes, about 29 MB, of sealed text.
+ * How many unfinished batches one account may stage at once. The CLI sends a batch's parts in order under a send lock, so one machine has one batch unfinished at a time and a batch is at most 16 parts (the join cap over 512 KiB parts); 16 leaves
+ * room for the same account on several machines, each with an interrupted batch. At the cap an account stages at most 16 x 8 MiB, about 134 MB, of sealed text, in D1 and not in the Worker, which reads one batch's parts at a time.
  */
 export const MAX_STAGED_BATCHES = 16;
 /** An unfinished batch older than this is swept. A client that comes back later sends every part again, which starts a batch clean, so a sweep costs a retry and no data. */

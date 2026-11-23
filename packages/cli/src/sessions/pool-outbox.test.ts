@@ -192,7 +192,7 @@ describe('removeBatchesExcept with a reader', () => {
 
 describe('overDepositLimit: the batch the pool would refuse whole (t1582)', () => {
   it('reads the limits from the wire contract the pool reads', () => {
-    expect([PART_BYTES, MAX_PARTS, MAX_ASSEMBLED_BYTES]).toEqual([512 * 1024, 8, 1_800_000]);
+    expect([PART_BYTES, MAX_PARTS, MAX_ASSEMBLED_BYTES]).toEqual([512 * 1024, 16, 8 * 1024 * 1024]);
   });
 
   it('takes a batch of exactly the assembled limit, and refuses one byte over', () => {

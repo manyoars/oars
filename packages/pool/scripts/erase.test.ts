@@ -1634,3 +1634,44 @@ describe('restricting one account (GDPR Article 18)', () => {
     expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
   });
 });
+
+describe('erasing a deposit whose skeleton is stored past one row (t1583)', () => {
+  /** Stores the deposit row's skeleton as a split one is: the characters before `at(text)` in the row and the rest as piece 1, which is what a skeleton past one row holds without depositing one that large. */
+  const split = async (account: string, id: string, cut: (text: string) => number): Promise<string> => {
+    const text = textOf((await all('SELECT skeleton FROM deposits WHERE account = ? AND id = ?', account, id))[0], 'skeleton');
+    const at = cut(text);
+    const db = await pool.db();
+    await db.prepare('UPDATE deposits SET skeleton = ? WHERE account = ? AND id = ?').bind(text.slice(0, at), account, id).run();
+    await db.prepare('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, 1, ?)').bind(account, id, text.slice(at)).run();
+    return text;
+  };
+  const pieces = (): Promise<number> => count('SELECT COUNT(*) AS held FROM deposit_skeleton_rows');
+
+  it('finds a leaked value cut between two pieces, and the erasure deletes the pieces with the content', async () => {
+    const value = 'AKIAFAKEKEY000SPLIT1';
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000078aa', value), token)).status).toBe(201);
+    const before = await pieces();
+    // The cut falls inside the value, so neither piece holds it alone.
+    await split(account, '00000000000078aa', (text) => text.indexOf(value) + 5);
+    expect(await pieces()).toBe(before + 1);
+    expect(await count("SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND instr(skeleton, ?) > 0", account, value)).toBe(0);
+    expect((await findDepositsContaining(await store(), { account }, value)).deposits.map((one) => one.session)).toEqual(['00000000000078aa']);
+    await eraseLeakedSecret(await store(), { account, id: '00000000000078aa', value }, NOW);
+    expect(await pieces()).toBe(before);
+    expect(await dump()).not.toContain(value.slice(5));
+  }, 60_000);
+
+  it('keeps the anonymous shape of the whole skeleton under a lawful request, and leaves no piece', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000078ab'), token)).status).toBe(201);
+    const before = await pieces();
+    await split(account, '00000000000078ab', () => 40);
+    const markers = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND json_extract(skeleton, '$.erased') = 'lawful-request' AND json_extract(skeleton, '$.transcripts') IS NOT NULL");
+    const shapes = await markers();
+    await eraseAccount(await store(), account, NOW);
+    // The shape was read from the joined skeleton: a read of the row's first piece alone does not parse, and would keep the marker alone.
+    expect(await markers()).toBe(shapes + 1);
+    expect(await pieces()).toBe(before);
+  }, 60_000);
+});

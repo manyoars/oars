@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { BIG_CALLS, bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
-import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { MAX_ASSEMBLED_BYTES, MAX_PARTS, parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { MAX_STAGED_BATCHES, receivePart, STAGED_MAX_AGE_MS } from './parts.js';
 import type { Bound, Env } from './http.js';
 import { acceptanceOf, poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
@@ -113,7 +113,7 @@ describe('a deposit past the request cap', () => {
       const token = await signedIn(pool, '9004');
       const parts = partsOf(big);
       const bad = (index: number, count: number, batch: string = hash): Promise<Answer> => pool.post('/v1/deposits', 'x', token, partHeaders(batch, index, count));
-      for (const [index, count] of [[0, 2], [3, 2], [1, 9], [1, 0]] as const) expect(await bad(index, count)).toMatchObject({ status: 400, json: { error: 'bad_part' } });
+      for (const [index, count] of [[0, 2], [3, 2], [1, MAX_PARTS + 1], [1, 0]] as const) expect(await bad(index, count)).toMatchObject({ status: 400, json: { error: 'bad_part' } });
       expect(await bad(1, 2, 'not-a-hash')).toMatchObject({ status: 400, json: { error: 'bad_part' } });
       expect(await pool.post('/v1/deposits', 'x', token, { 'oars-part': '1/2' })).toMatchObject({ status: 400, json: { error: 'bad_part' } });
       // A second part that says another count than the first is not part of the same batch.
@@ -174,10 +174,11 @@ describe('a deposit past the request cap', () => {
       const token = await signedIn(pool, '9008');
       const piece = 'x'.repeat(1_000_000);
       const batch = sha('a batch that will not fit');
-      expect((await pool.post('/v1/deposits', piece, token, partHeaders(batch, 1, 3))).status).toBe(202);
-      expect(await rows(pool, `SELECT COUNT(*) AS count FROM deposit_parts WHERE batch = '${batch}'`)).toBe(1);
-      // 2,000,000 staged bytes cannot join under 1,800,000, so the second part is refused before the third is sent.
-      expect(await pool.post('/v1/deposits', piece, token, partHeaders(batch, 2, 3))).toMatchObject({ status: 413, json: { error: 'too_large' } });
+      const fit = Math.floor(MAX_ASSEMBLED_BYTES / piece.length);
+      for (let part = 1; part <= fit; part += 1) expect((await pool.post('/v1/deposits', piece, token, partHeaders(batch, part, fit + 2))).status).toBe(202);
+      expect(await rows(pool, `SELECT COUNT(*) AS count FROM deposit_parts WHERE batch = '${batch}'`)).toBe(fit);
+      // One more piece cannot join under the cap, so that part is refused before the last is sent.
+      expect(await pool.post('/v1/deposits', piece, token, partHeaders(batch, fit + 1, fit + 2))).toMatchObject({ status: 413, json: { error: 'too_large' } });
       expect(await rows(pool, `SELECT COUNT(*) AS count FROM deposit_parts WHERE batch = '${batch}'`)).toBe(0);
     } finally {
       await pool.dispose();
@@ -190,7 +191,8 @@ describe('a deposit past the request cap', () => {
       const token = await signedIn(pool, '9009');
       const piece = 'x'.repeat(1_000_000);
       const batch = sha('two parts at once');
-      const answers = await Promise.all([1, 2].map((at) => pool.post('/v1/deposits', piece, token, partHeaders(batch, at, 2))));
+      const count = Math.floor(MAX_ASSEMBLED_BYTES / piece.length) + 1;
+      const answers = await Promise.all(Array.from({ length: count }, (_, at) => pool.post('/v1/deposits', piece, token, partHeaders(batch, at + 1, count))));
       // Whichever part's check ran first may have answered 202 before the other arrived; the other refuses, and the batch is gone.
       expect(answers.map((answer) => answer.status).sort()).toContain(413);
       for (const answer of answers) expect([202, 413]).toContain(answer.status);
@@ -206,7 +208,7 @@ describe('a deposit past the request cap', () => {
     const staged: { part: number; body: string }[] = [];
     const piece = 'x'.repeat(1_000_000);
     // A staged part is sealed text: the base64 of a 12-byte IV, the piece, and a 16-byte tag. The stand-in never opens it, only counts its bytes.
-    const sealedLike = Buffer.alloc(1_000_028).toString('base64');
+    const sealedLike = Buffer.alloc(MAX_ASSEMBLED_BYTES + 28).toString('base64');
     let reads = 0;
     const prepare = (sql: string) => ({
       bind: (...values: (string | number | null)[]): Bound => ({
@@ -227,7 +229,7 @@ describe('a deposit past the request cap', () => {
     const request = new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(sha('three parts, one read behind'), 1, 3), body: piece });
     const env: Env = { DB: { prepare, batch: () => Promise.resolve([]) } };
     const answered = await receivePart(request, env, 'account', 'a-secret', piece, () => Promise.resolve(new Response('stored', { status: 201 })));
-    // Part 2 landed after part 1 read nothing: both bodies now sit staged, and 2,000,000 bytes cannot join under 1,800,000.
+    // Part 2 landed after part 1 read nothing: both bodies now sit staged, and the cap's bytes and part 1's cannot join under the cap.
     expect(answered.status).toBe(413);
     expect(staged).toEqual([]);
   });
@@ -341,12 +343,12 @@ describe('a deposit past the request cap', () => {
     }
   }, 120_000);
 
-  it('is refused past what one stored row can hold, and a body that is not a skeleton is refused by name', async () => {
+  it('is refused one byte past the join cap, and a body that is not a skeleton is refused by name', async () => {
     const pool = await startPool();
     try {
       const token = await signedIn(pool, '9005');
-      const huge = 'x'.repeat(2_000_000);
-      const pieces = [huge.slice(0, 1_000_000), huge.slice(1_000_000)];
+      const huge = 'x'.repeat(MAX_ASSEMBLED_BYTES + 1);
+      const pieces = Array.from({ length: Math.ceil(huge.length / 1_000_000) }, (_, at) => huge.slice(at * 1_000_000, (at + 1) * 1_000_000));
       const send = async (whole: string, split: readonly string[]): Promise<Answer[]> => {
         const batch = sha(whole);
         const answers: Answer[] = [];
@@ -426,6 +428,43 @@ describe('a skeleton past one stored row (t1583)', () => {
       const parsed = parseSkeleton(JSON.parse(whole));
       if (!parsed.ok) throw new Error('the fixture does not parse');
       expect(await storedSkeleton(pool, await accountOf(pool), '0000000000001584')).toBe(JSON.stringify(parsed.skeleton));
+    } finally {
+      await pool.dispose();
+    }
+  }, 300_000);
+
+  it('takes back the whole batch a resend replaces, and a resend that fits one row leaves no piece and reads as a row stored before pieces did', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9103');
+      const id = '0000000000001585';
+      const whole = bigWithin(id, 4_000_000);
+      const send = async (text: string): Promise<Answer | undefined> => {
+        const parts = partsOf(text);
+        const answers: Answer[] = [];
+        for (const [at, part] of parts.entries()) answers.push(await pool.post('/v1/deposits', part, token, partHeaders(sha(text), at + 1, parts.length)));
+        // A finished batch answers a retry from its marker without storing it again, so the marker goes and the next send of the same batch is a resend.
+        await (await pool.db()).prepare('DELETE FROM deposit_parts').run();
+        return answers.at(-1);
+      };
+      const cells = async (): Promise<string> => JSON.stringify((await (await pool.db()).prepare('SELECT key, sessions, ok, failed, tokens FROM cells ORDER BY key').all()).results);
+      expect(await send(whole)).toMatchObject({ status: 201 });
+      const account = await accountOf(pool);
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_skeleton_rows')).toBe(2);
+      const held = await cells();
+      // The same batch again writes no cell: the resend read the stored skeleton whole and took back what it had added. A read of the row's first piece alone does not parse, and the batch would be counted twice.
+      expect(await send(whole)).toMatchObject({ status: 201 });
+      expect(await cells()).toBe(held);
+      // A shorter batch under the same id fits the row: the pieces of the longer one go, and the row reads alone, as every row stored before pieces did.
+      const short = canonicalBytes(bigSkeleton(id, 10));
+      expect(await pool.post('/v1/deposits', short, token)).toMatchObject({ status: 201 });
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_skeleton_rows')).toBe(0);
+      const parsed = parseSkeleton(JSON.parse(short));
+      if (!parsed.ok) throw new Error('the fixture does not parse');
+      expect(await storedSkeleton(pool, account, id)).toBe(JSON.stringify(parsed.skeleton));
+      const alone = await cells();
+      expect(await pool.post('/v1/deposits', short, token)).toMatchObject({ status: 201 });
+      expect(await cells()).toBe(alone);
     } finally {
       await pool.dispose();
     }
