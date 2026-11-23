@@ -8,6 +8,7 @@ import { CliError } from '../errors.js';
 import { machineOf } from './machine.js';
 import { ask, currentTerms, DEPOSIT, isBatchRefusal, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
+import { logFailure } from './pool-due.js';
 import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { numberIn } from './pool-replica.js';
@@ -139,7 +140,9 @@ export const nightlyPoolSend = async (deps: RunDeps, via?: Sender): Promise<Nigh
   try {
     // A pool that goes silent ends the night after SEND_STALL_MS, so it cannot hold the send lock (and with it every `deposit --send`) for as long as the pool stalls. The next run sends what this one did not.
     result = await night(deps, via ?? networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS }), tally);
-  } catch {
+  } catch (error) {
+    // The note keeps counts only, so the reason goes to `pool-send.log`: one masked line, the same writer the trigger's failures use.
+    await logFailure(runtimeOf(deps).storeDir, deps.now(), error);
     result = { ...tally, outcome: 'failed' };
   }
   await record(runtimeOf(deps).storeDir, result, deps.now());

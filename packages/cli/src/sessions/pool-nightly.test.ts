@@ -1,5 +1,5 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -313,6 +313,28 @@ describe('the nightly pool send', () => {
     const note = readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8');
     expect(note).toContain('"outcome":"failed"');
     expect(note).not.toContain('ECONNREFUSED');
+  });
+
+  it('writes one masked line for the sender failure to pool-send.log and keeps the note at failed', async () => {
+    const here = await scene('granted');
+    const boom: Sender = () => Promise.reject(new Error('boom'));
+    expect((await nightlyPoolSend(here.deps, boom)).outcome).toBe('failed');
+    const lines = readFileSync(join(here.staged.storeDir, 'pool-send.log'), 'utf8').trimEnd().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[0-9:.]+Z boom$/);
+    expect(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8')).not.toContain('boom');
+  });
+
+  it('masks a token and a home path in the logged line, and keeps a multi-line message to one line', async () => {
+    const here = await scene('granted');
+    const token = 'ghp_Canary1234567890abcdefghijklmnop';
+    const leaky: Sender = () => Promise.reject(new Error(`failed with ${token} at ${join(homedir(), 'secret', 'file.json')}\n    at stack frame`));
+    await nightlyPoolSend(here.deps, leaky);
+    const log = readFileSync(join(here.staged.storeDir, 'pool-send.log'), 'utf8');
+    expect(log.trimEnd().split('\n')).toHaveLength(1);
+    expect(log).not.toContain(token);
+    expect(log).not.toContain(homedir());
+    expect(log).not.toContain('stack frame');
   });
 
   it('sends nothing on a machine, whatever the sign-in and the covenant say, and leaves the outbox as it was', async () => {
