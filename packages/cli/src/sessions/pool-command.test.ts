@@ -37,7 +37,7 @@ import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledCloc
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 // A test sets `limit.bytes` to reach the assembled-size limit with a small batch: the client reads the limit from this module (t1582), so the mock below hands it that value while it is set.
-const limit = vi.hoisted(() => ({ bytes: undefined as number | undefined }));
+const limit = vi.hoisted((): { bytes: number | undefined } => ({ bytes: undefined }));
 vi.mock('./pool-wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof PoolWire>();
   // The memory proof's child must not keep a record of every call's arguments (a spy holds the whole session and batch it saw, about 33 KB a session), so there it runs the real function.
@@ -4641,12 +4641,12 @@ describe('oars pool deposit --send-all (t1199)', () => {
     const BAD_PART = answer(400, { error: 'bad_part', message: 'oars-part is n/m with 1 <= n <= m <= 8.' });
     const TOO_LARGE = answer(413, { error: 'too_large', message: 'A deposit holds at most 1800000 bytes, in parts or whole.' });
 
-    it.each([['bad_part', BAD_PART], ['too_large', TOO_LARGE]])('goes on to the next batch after a %s refusal, sends the third, keeps the second unsent, and still ends non-zero with the counts', async (_code, refusal) => {
+    it.each([['bad_part', BAD_PART, 400], ['too_large', TOO_LARGE, 413]])('goes on to the next batch after a %s refusal, sends the third, keeps the second unsent, and still ends non-zero with the counts', async (code, refusal, status) => {
       const scene = await clean();
       const hashes = plant(scene, 1, 3);
       await show(scene);
       const pool = refusedPool(new Set([hashes[1] ?? '']), refusal);
-      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status: refusal.status, code: refusal.body && Reflect.get(refusal.body, 'error') }, details: { tally: { sent: 2, refused: 1, failed: 0, left: 0 } } });
+      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status, code }, details: { tally: { sent: 2, refused: 1, failed: 0, left: 0 } } });
       expect(pool.landed).toEqual([hashes[0], hashes[2]]);
       expect(sentLogOf(scene)).toEqual([hashes[0], hashes[2]]);
       expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for size and kept in the outbox.');
