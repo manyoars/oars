@@ -3,6 +3,7 @@
 import { incrementsOf, type CellRow, type Increments, type StratumRow } from '../../cli/src/sessions/cell-increments.js';
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { fieldOf, type Bound, type Env } from './http.js';
+import { wholeSkeletonOf, wholeSkeletonSql } from './skeleton-rows.js';
 import { isoWeekOf, weekdayOf } from './week.js';
 
 export { incrementsOf, type CellRow, type Increments, type StratumRow };
@@ -47,10 +48,13 @@ export interface Previous {
  * not derived again on a read), so a resend over it adds the whole batch a second time: a limit the stored form has until the ledger is rebuilt by a later change.
  */
 export const previousOf = async (env: Env, account: string, id: string): Promise<Previous | undefined> => {
-  const held = await env.DB.prepare('SELECT skeleton, ingest, tier, counted_at FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
-  const text = fieldOf(held, 'skeleton');
+  // The row and its pieces in one read (`skeleton-rows.ts`), so a skeleton past one row parses whole.
+  const { results } = await env.DB.prepare(wholeSkeletonSql(['ingest', 'tier', 'counted_at'])).bind(account, id, account, id).all();
+  const whole = wholeSkeletonOf(results);
+  const held = whole?.row;
+  const text = whole?.skeleton;
   const ingest = fieldOf(held, 'ingest');
-  if (typeof text !== 'string' || typeof ingest !== 'string') return undefined;
+  if (text === undefined || typeof ingest !== 'string') return undefined;
   const none = fieldOf(held, 'tier') === 'none';
   const at = fieldOf(held, 'counted_at');
   const heldAt = typeof at === 'number' ? at : null;
@@ -98,6 +102,15 @@ export const chunksOf = (items: readonly unknown[], limit = CHUNK_BYTES): string
 };
 
 const GUARD = 'EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)';
+
+/**
+ * The statements that replace a deposit's stored pieces past its first (`skeleton-rows.ts`), to run right after the deposit's own row in the same transaction and under its guard, so a refused deposit leaves the pieces it had.
+ * The old pieces go first: a resend whose skeleton is shorter leaves none of the longer one behind. `pieces` is the whole cut, whose first piece the row itself holds.
+ */
+export const pieceStatements = (env: Env, account: string, id: string, ingest: string, pieces: readonly string[]): Bound[] => [
+  env.DB.prepare(`DELETE FROM deposit_skeleton_rows WHERE account = ? AND id = ? AND ${GUARD}`).bind(account, id, account, id, ingest),
+  ...pieces.slice(1).map((body, at) => env.DB.prepare(`INSERT INTO deposit_skeleton_rows (account, id, piece, body) SELECT ?, ?, ?, ? WHERE ${GUARD}`).bind(account, id, at + 1, body, account, id, ingest)),
+];
 
 /**
  * The statements that write one batch's increments, to run after the deposit's own row in the same transaction. Each carries the guard, so none takes effect unless that row did.

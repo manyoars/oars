@@ -10,7 +10,7 @@ import { isErased, rawDigest } from './tombstones.js';
 const FORMAT = 'oars-pool-account-export';
 const VERSION = 1;
 
-/** The most rows one page carries, by section. A deposit holds up to 1 MB, so its pages are short enough to stay inside the Worker's response and D1's result limits; the rest are small rows. */
+/** The most rows one page carries, by section. A deposit row, or a piece of a skeleton past one, holds up to 2 MB, so its pages are short enough to stay inside the Worker's response and D1's result limits; the rest are small rows. */
 const DEPOSIT_PAGE = 10;
 const SMALL_PAGE = 500;
 
@@ -182,6 +182,8 @@ const SECTIONS: readonly Section[] = [
       requestCountry: text(row, 'request_country'),
     }),
   },
+  // The rest of a skeleton past one stored row (`skeleton-rows.ts`): its deposit's `skeleton` is then the first piece, as text, and these are the pieces after it, which join to the whole in `piece` order.
+  { name: 'depositSkeletonRows', select: 'id, piece, body', table: 'deposit_skeleton_rows', owner: 'account', order: ['id', 'piece'], keyed: ['id', 'piece'], page: DEPOSIT_PAGE, view: (row) => ({ id: text(row, 'id'), piece: count(row, 'piece'), body: text(row, 'body') }) },
 ];
 
 /** A cursor is the section a page came from and the last row's ordering values, as base64url JSON. It is a position and nothing else, so one made up or taken from another account moves a read within the caller's own rows. */

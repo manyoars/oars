@@ -7,6 +7,7 @@ import { projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { recount, type Counting, type Kind } from '../src/cluster-store.js';
 import { isListed } from '../src/field-classes.js';
+import { piecesOf, wholeSkeletonOf, wholeSkeletonSql } from '../src/skeleton-rows.js';
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
 import { eraseBatches, type TelemetryStore } from './erase-batches.js';
 
@@ -213,13 +214,19 @@ const dropObject = async (store: EraseStore, account: string, sha256: string, re
   return store.run('UPDATE raw_objects SET erased_on = ?, deposit = NULL, place = NULL WHERE account = ? AND sha256 = ? AND erased_on IS NULL', [dayOf(now), account, sha256]);
 };
 
+/** The skeleton a live deposit row holds, joined from its pieces when it is past one row (`skeleton-rows.ts`), or none when the row is gone or already erased. */
+const storedSkeleton = async (store: EraseStore, account: string, id: string): Promise<string | undefined> => {
+  const whole = wholeSkeletonOf(await store.rows(wholeSkeletonSql(['erased_on']), [account, id, account, id]));
+  return whole === undefined || fieldOf(whole.row, 'erased_on') !== null ? undefined : whole.skeleton;
+};
+
 /**
  * The Skeleton an erased deposit holds: the marker alone for a leaked secret (that Deposit is not a 6.6(c) unlink, and a secret may sit anywhere in it), else the marker with the anonymous shape beside it (`anonymizeSkeleton`).
  * A row whose text is no Skeleton the reader parses keeps the marker alone. The `erased` field stays either way, so a resend is refused.
  */
 const keptSkeleton = async (store: EraseStore, account: string, id: string, reason: ErasureReason): Promise<string> => {
   if (reason !== 'lawful-request') return markerOf(reason);
-  const text = (await store.rows('SELECT skeleton FROM deposits WHERE account = ? AND id = ? AND erased_on IS NULL', [account, id])).map((row) => textOf(row, 'skeleton'))[0] ?? '';
+  const text = (await storedSkeleton(store, account, id)) ?? '';
   try {
     return JSON.stringify(anonymizeSkeleton(JSON.parse(text), reason) ?? { erased: reason });
   } catch {
@@ -227,10 +234,18 @@ const keptSkeleton = async (store: EraseStore, account: string, id: string, reas
   }
 };
 
-/** The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed. */
+/**
+ * The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed.
+ * The pieces of a skeleton past one row are content too, so they are deleted; a kept shape past one row is stored in pieces again. A run that stops between the row and its pieces leaves the row erased and its old pieces, which no
+ * read joins to an erased row (`storedSkeleton`, the export's marker), and a later run of the same erasure finds the row erased and changes nothing, so the pieces are deleted first.
+ */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);
-  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [await keptSkeleton(store, account, id, reason), dayOf(now), account, id]);
+  const [first = '', ...rest] = piecesOf(await keptSkeleton(store, account, id, reason));
+  await store.run('DELETE FROM deposit_skeleton_rows WHERE account = ? AND id = ?', [account, id]);
+  const changed = await store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [first, dayOf(now), account, id]);
+  if (changed > 0) for (const [at, body] of rest.entries()) await store.run('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, ?, ?)', [account, id, at + 1, body]);
+  return changed;
 };
 
 /**
@@ -353,12 +368,13 @@ const findValue = async (store: EraseStore, value: string, account?: string): Pr
   const stored = jsonForm(value);
   const forms = clearForms(value);
   const found: ValueFind = { deposits: [], motifs: [], cells: [], contributors: [] };
-  await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions', 'counted_at'], ['account', 'id'], (row) => {
-    if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) {
+  // A skeleton past one row is searched whole, so a value cut between two pieces is still found; only such a row costs a second read.
+  await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions', 'counted_at', 'EXISTS (SELECT 1 FROM deposit_skeleton_rows AS piece WHERE piece.account = deposits.account AND piece.id = deposits.id) AS split'], ['account', 'id'], async (row) => {
+    const skeleton = fieldOf(row, 'split') === 1 ? ((await storedSkeleton(store, textOf(row, 'account'), textOf(row, 'id'))) ?? '') : textOf(row, 'skeleton');
+    if (skeleton.includes(stored) || textOf(row, 'extensions').includes(stored)) {
       const counted = fieldOf(row, 'counted_at');
       found.deposits.push({ account: textOf(row, 'account'), id: textOf(row, 'id'), day: typeof counted === 'number' ? new Date(counted).toISOString().slice(0, 10) : null });
     }
-    return Promise.resolve();
   }, account === undefined ? "erased_on IS NULL AND account NOT LIKE 'erased:%' AND " : "erased_on IS NULL AND account NOT LIKE 'erased:%' AND account = ? AND ", account === undefined ? [] : [account]);
   const touched = new Set<string>();
   if (account !== undefined) {

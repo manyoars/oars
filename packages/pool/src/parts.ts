@@ -83,6 +83,17 @@ const sweep = (env: Env, account: string, now: number): Promise<unknown> =>
     .bind(account, account, now - STAGED_MAX_AGE_MS)
     .run();
 
+/**
+ * The batch the held parts join to, or null when one does not open or the join is not the batch `batch` names. Its own function so that the sealed parts, their opened texts, and the join's bytes are dropped once it returns: a join near the cap
+ * holds each of them at the batch's size, and the deposit that follows needs the Worker's memory for the batch in parsed form.
+ */
+const joined = async (key: HashKey, held: readonly Held[], batch: string): Promise<string | null> => {
+  const opened = await Promise.all(held.map((row) => open(key, row.body)));
+  const whole = opened.every((text) => text !== null) ? opened.join('') : null;
+  if (whole === null) return null;
+  return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(whole))) === batch ? whole : null;
+};
+
 /** One part of a batch, already read and under the request cap. `secret` is the pool's `INGEST_HASH_KEY`, which seals the staged text. `store` is the path a whole deposit takes. */
 export const receivePart = async (request: Request, env: Env, account: string, secret: string, body: string, store: (text: string) => Promise<Response>): Promise<Response> => {
   const found = PART.exec(request.headers.get('oars-part') ?? '');
@@ -115,7 +126,7 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   )
     .bind(account, batch, part, count, await seal(key, body), Date.now(), account, batch, account, batch, MAX_STAGED_BATCHES)
     .run();
-  const held = await heldParts(env, account, batch);
+  let held = await heldParts(env, account, batch);
   // Nothing was written and this part is not already held: the cap refused it.
   if (inserted.meta.changes === 0 && !held.some((row) => row.part === part)) {
     return refuse(429, 'staging_full', `An account may hold ${String(MAX_STAGED_BATCHES)} unfinished batches at once. Finish them, or wait: an unfinished batch is dropped after 24 hours.`, 'oars-batch', { 'retry-after': String(STAGED_MAX_AGE_MS / 1000) });
@@ -127,10 +138,9 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   }
   if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
   // The join opens every part; one that does not open (a changed byte, another key) is a batch that is not the one named.
-  const opened = await Promise.all(held.map((row) => open(key, row.body)));
-  const whole = opened.every((text) => text !== null) ? opened.join('') : null;
-  const bytes = new TextEncoder().encode(whole ?? '');
-  if (whole === null || hex(await crypto.subtle.digest('SHA-256', bytes)) !== batch) {
+  const whole = await joined(key, held, batch);
+  held = [];
+  if (whole === null) {
     await forget(env, account, batch);
     return refuse(400, 'part_mismatch', 'The parts do not join to the batch that oars-batch names. Send every part again.', 'oars-batch');
   }
@@ -138,8 +148,8 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   if (stored.status === 201) {
     const id = textField(await bodyOf(stored.clone()), 'id') ?? '';
     await env.DB.prepare("UPDATE deposit_parts SET body = '', deposit = ? WHERE account = ? AND batch = ?").bind(id, account, batch).run();
-  } else if (stored.status === 400 || stored.status === 422 || (stored.status === 403 && textField(await bodyOf(stored.clone()), 'error') === 'erased')) {
-    // The batch itself is refused (size was refused above, before the join, so there is no 413 here; a 403 `erased` is a batch that carries erased content): sending its parts again would change nothing, so they are not kept. A conflict or a brake (a 403 `deposit_limit`) can pass later, so those keep them.
+  } else if (stored.status === 400 || stored.status === 413 || stored.status === 422 || (stored.status === 403 && textField(await bodyOf(stored.clone()), 'error') === 'erased')) {
+    // The batch itself is refused (a 413 here is a bag too large to leave its skeleton room in a row, since the join's size was refused above; a 403 `erased` is a batch that carries erased content): sending its parts again would change nothing, so they are not kept. A conflict or a brake (a 403 `deposit_limit`) can pass later, so those keep them.
     await forget(env, account, batch);
   }
   return stored;

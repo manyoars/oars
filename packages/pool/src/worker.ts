@@ -1,5 +1,5 @@
 // The pool server: a Workers fetch handler over one D1 database. A deposit is a skeleton of a closed list of fields, whose names the pool classes (`field-classes.ts`); a shape error is refused, naming the field.
-import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, type ParsedSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { isVocabAhead, READ_VOCAB_VERSIONS } from '../../cli/src/sessions/public-vocabulary.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
@@ -12,12 +12,13 @@ import { handOver, listFetches, markBuilt, markFailed } from './pack-operator.js
 import { downloadFetch, startFetch } from './pack-fetches.js';
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
-import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
+import { incrementsOf, incrementStatements, markOf, netCellCount, pieceStatements, previousOf, shapeOf, weekStatements } from './ingest.js';
 import { loginGone, loginPoll, loginStart, logout, proveControl, restrictedRefusal } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
-import { stampOf, takeClaim } from './provenance.js';
+import { stampOf, takeClaim, type Claim } from './provenance.js';
 import { grantRawConsent, rawRoute, withdrawRawConsent } from './raw.js';
+import { piecesOf, SKELETON_ROW_BYTES } from './skeleton-rows.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
@@ -48,10 +49,17 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
   return undefined;
 };
 
-/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. The hash key is read before the body, so a pool with none never gets here. */
-const storeDeposit = async (env: Env, caller: Caller, secret: string, text: string, country: string | null): Promise<Response> => {
+/** What a deposit's text reads as once it passes every check: the claim set apart, and the skeleton parsed from the hashed form, with its bag and other values. */
+interface Read extends ParsedSkeleton {
+  claim: Claim | undefined;
+}
+
+/**
+ * A deposit's text read and checked, or the refusal. Its own function so that the parsed body, the copy as sent, and the hashed copy are dropped once it returns: a batch near the join cap holds several times its size in parsed form, and the
+ * Worker has 128 MB, so the write that follows holds the stored form and not every form it was read through.
+ */
+const readDeposit = async (env: Env, caller: Caller, secret: string, text: string): Promise<Read | Response> => {
   const { account, machine } = caller;
-  const stamp = stampOf(machine);
   let body: unknown;
   try {
     body = JSON.parse(text);
@@ -75,15 +83,29 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   const parsed = parseSkeleton(await hashHosts(await hashKey(secret), body));
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
   // The parsed skeleton is what is stored, not the text that came in: it holds only the fields that were read.
-  const { skeleton, extensions, others } = parsed;
-  const lateField = futureDayField(skeleton, Date.now());
+  const lateField = futureDayField(parsed.skeleton, Date.now());
   if (lateField !== undefined) return refuse(422, 'closed_vocabulary', `${lateField}: later than tomorrow UTC`, lateField);
+  return { ...parsed, claim };
+};
+
+/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. The hash key is read before the body, so a pool with none never gets here. */
+const storeDeposit = async (env: Env, caller: Caller, secret: string, text: string, country: string | null): Promise<Response> => {
+  const { account, machine } = caller;
+  const stamp = stampOf(machine);
+  const read = await readDeposit(env, caller, secret, text);
+  if (read instanceof Response) return read;
+  const { claim, skeleton, extensions, others } = read;
   // The pool does not ration contribution (data is the point): both brakes are an operator's, off unless a binding sets one.
   const limit = brake(env.MAX_DEPOSITS_PER_ACCOUNT);
   const budget = brake(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT);
   const stored = JSON.stringify(skeleton);
   // The bag is stored beside the skeleton and read by nothing that serves: ingest reads `skeleton` only, so no cell, read, or bundle is derived from it.
   const bag = JSON.stringify(extensions);
+  // A skeleton past one row is stored in pieces (`skeleton-rows.ts`): the row keeps the first, beside the bag and deltas, so those two must leave it room. A batch whose bag alone fills a row is refused for its size, as one past the join cap is.
+  const encoder = new TextEncoder();
+  const room = SKELETON_ROW_BYTES - encoder.encode(bag).length - encoder.encode(DELTAS).length;
+  if (room <= 0) return refuse(413, 'too_large', `A deposit's extensions hold at most ${String(SKELETON_ROW_BYTES)} bytes.`);
+  const pieces = piecesOf(stored, room);
   // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the batch's own tier, which the upsert writes again on a resend: the tier falls on any resend whose root no longer holds, and the date clears only when that resend also writes a cell.
   // `written` is what ingest will write over the row held now, not what the batch derives: a batch sent again unchanged writes nothing and leaves the row's date alone.
   const next = incrementsOf(skeleton);
@@ -98,13 +120,15 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const insert = env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher, request_country) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, request_country = excluded.request_country, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
+    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher, request_country) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + (SELECT COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM deposit_skeleton_rows WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, request_country = excluded.request_country, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, country, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, pieces[0] ?? '', DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, country, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, account, skeleton.id, encoder.encode(stored).length + encoder.encode(DELTAS).length + encoder.encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const arrived = new Date();
   const [inserted] = await env.DB.batch([
     insert,
+    // The rest of a skeleton past one row, guarded by the row's mark like everything after it.
+    ...pieceStatements(env, account, skeleton.id, ingest, pieces),
     // A machine records the day of its last stored deposit. Guarded by the row's `ingest` mark like the increments, so a deposit a brake refused moves nothing.
     ...(machine === undefined
       ? []

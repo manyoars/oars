@@ -58,7 +58,10 @@ const ACCOUNTS = `SELECT id, restricted_at, raw_consent_version FROM accounts WH
 /** Every acceptance with a text hash and an input; the hash is checked against the held screen in code, since SQL cannot hold the screen. */
 const ACCEPTANCES = 'SELECT version, text_sha256, accepted_at FROM covenant_acceptances WHERE account = ? AND text_sha256 IS NOT NULL AND input IS NOT NULL ORDER BY accepted_at, version';
 
-const DEPOSITS = `SELECT id, tier, counted_at, request_country, skeleton FROM deposits WHERE account = ? AND erased_on IS NULL AND id > ? ORDER BY id LIMIT ${String(PAGE)}`;
+/** `split` marks a skeleton past one row (`skeleton-rows.ts`), whose pieces `PIECES` reads to join it whole; only such a row costs a second read. */
+const DEPOSITS = `SELECT id, tier, counted_at, request_country, skeleton, EXISTS (SELECT 1 FROM deposit_skeleton_rows AS piece WHERE piece.account = deposits.account AND piece.id = deposits.id) AS split FROM deposits WHERE account = ? AND erased_on IS NULL AND id > ? ORDER BY id LIMIT ${String(PAGE)}`;
+
+const PIECES = 'SELECT body FROM deposit_skeleton_rows WHERE account = ? AND id = ? ORDER BY piece';
 
 const RAW_COPIES = 'SELECT sha256, deposit, place FROM raw_objects WHERE account = ? AND erased_on IS NULL ORDER BY sha256';
 
@@ -120,7 +123,7 @@ export const pullDeposits = async (store: ReadOnlyStore, folder: ExportFolder): 
     let depositsFile = '';
     for await (const deposit of paged(store, DEPOSITS, [account])) {
       pulled.deposits += 1;
-      depositsFile += line({ id: textOf(deposit, 'id'), tier: textOf(deposit, 'tier'), counted_at: numberOrNull(deposit, 'counted_at'), request_country: textOrNull(deposit, 'request_country'), skeleton: textOf(deposit, 'skeleton') });
+      depositsFile += line({ id: textOf(deposit, 'id'), tier: textOf(deposit, 'tier'), counted_at: numberOrNull(deposit, 'counted_at'), request_country: textOrNull(deposit, 'request_country'), skeleton: numberOrNull(deposit, 'split') === 1 ? [textOf(deposit, 'skeleton'), ...(await store.rows(PIECES, [account, textOf(deposit, 'id')])).map((piece) => textOf(piece, 'body'))].join('') : textOf(deposit, 'skeleton') });
     }
     await folder.write(`${account}/deposits.jsonl`, depositsFile);
     let linksFile = '';
