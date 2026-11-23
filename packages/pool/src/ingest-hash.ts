@@ -20,15 +20,30 @@ const digestOf = async (key: HashKey, value: string): Promise<string> => {
 /** The words the wire puts where there is no host: they name no host, so they stay as they are and never take a digest the floor would count as a host. */
 const SENTINELS: ReadonlySet<unknown> = new Set([OTHER, PRIVATE, LITERAL]);
 
-/** A hashed field's value of any shape: a string is hashed as it is, and anything else as its JSON, so no shape of the field escapes. */
-const hashedValue = (key: HashKey, value: unknown): Promise<unknown> => (SENTINELS.has(value) ? Promise.resolve(value) : digestOf(key, typeof value === 'string' ? value : JSON.stringify(value)));
+/** The text a hashed field's value is digested from: a string as it is, and anything else as its JSON, so no shape of the field escapes. */
+const hashedText = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value));
 
-/** The value with every hashed key, at any depth, replaced by its digest. */
-const hashedTree = async (key: HashKey, value: unknown): Promise<unknown> => {
-  if (Array.isArray(value)) return Promise.all(value.map((entry: unknown) => hashedTree(key, entry)));
+/** Whether a field's value takes a digest: a hashed key that holds a value other than null or a sentinel. */
+const takesDigest = (name: string, entry: unknown): boolean => HASHED_KEYS.has(name) && entry !== null && !SENTINELS.has(entry);
+
+/** The texts under hashed keys, at any depth, added to `into`. A walk with no promise per node, so a body of millions of nodes holds one set of texts and not a promise for each node (t1583). */
+const collect = (value: unknown, into: Set<string>): void => {
+  if (Array.isArray(value)) {
+    for (const entry of value) collect(entry, into);
+    return;
+  }
+  if (typeof value !== 'object' || value === null) return;
+  for (const [name, entry] of Object.entries(value)) {
+    if (takesDigest(name, entry)) into.add(hashedText(entry));
+    else if (!HASHED_KEYS.has(name)) collect(entry, into);
+  }
+};
+
+/** The value with every hashed key, at any depth, replaced by its digest from `digests`. */
+const replaced = (value: unknown, digests: ReadonlyMap<string, string>): unknown => {
+  if (Array.isArray(value)) return value.map((entry: unknown) => replaced(entry, digests));
   if (typeof value !== 'object' || value === null) return value;
-  const entries = await Promise.all(Object.entries(value).map(async ([name, entry]): Promise<[string, unknown]> => [name, HASHED_KEYS.has(name) && entry !== null ? await hashedValue(key, entry) : await hashedTree(key, entry)]));
-  return Object.fromEntries(entries);
+  return Object.fromEntries(Object.entries(value).map(([name, entry]): [string, unknown] => [name, takesDigest(name, entry) ? digests.get(hashedText(entry)) : HASHED_KEYS.has(name) ? entry : replaced(entry, digests)]));
 };
 
 /** The key a Worker secret holds, as text. An empty secret never reaches here: `bound` reads it as unset. */
@@ -38,4 +53,11 @@ export const hashKey = (secret: string): Promise<HashKey> => crypto.subtle.impor
  * The body with every hashed key, at any depth, replaced by its digest. It runs on the body as it came, so the skeleton, the bag (an unknown field's value, a literal beside `other`), and everything derived from them are
  * parsed from the hashed form, and a clear host never reaches a write. The body was parsed once already, so a host that is not a name was refused before it got here.
  */
-export const hashHosts = (key: HashKey, body: unknown): Promise<unknown> => hashedTree(key, body);
+export const hashHosts = async (key: HashKey, body: unknown): Promise<unknown> => {
+  // Each distinct text is digested once, one at a time: a session names few hosts however many calls it holds.
+  const texts = new Set<string>();
+  collect(body, texts);
+  const digests = new Map<string, string>();
+  for (const text of texts) digests.set(text, await digestOf(key, text));
+  return replaced(body, digests);
+};
