@@ -16,7 +16,23 @@ import { SendLockBusy, withSendLock, type LockFs } from './pool-send-lock.js';
 import { sentHashes } from './pool-sent.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
+import type * as PoolWire from './pool-wire.js';
 
+// A test sets `limit.bytes` to reach the assembled-size limit with a small batch: the client reads the limit from this module (t1582), so the mock hands it that value while it is set.
+const limit = vi.hoisted((): { bytes: number | undefined } => ({ bytes: undefined }));
+vi.mock('./pool-wire.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof PoolWire>();
+  return {
+    ...actual,
+    get MAX_ASSEMBLED_BYTES(): number {
+      return limit.bytes ?? actual.MAX_ASSEMBLED_BYTES;
+    },
+  };
+});
+
+afterEach(() => {
+  limit.bytes = undefined;
+});
 afterEach(cleanup);
 
 const POOL = 'https://pool.test';
@@ -770,5 +786,31 @@ describe('the nightly send past a batch the pool refuses for its size (t1582)', 
     const pool = refusing(hashes[0] ?? '', refusal);
     expect(await nightlyPoolSend(here.deps, pool.via)).toMatchObject({ outcome: 'failed', batches: 0 });
     expect((await sentHashes(outbox)).size).toBe(0);
+  });
+});
+
+describe('the nightly build that keeps a session out for size (t1582 fix round)', () => {
+  it('carries the count of sessions kept out for size into the note as keptForSize, apart from the send-time oversize, and sends the rest', async () => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const sizes = (await heldAcross(outbox)).batches.map((batch) => Buffer.byteLength(batch.bytes, 'utf8'));
+    expect(sizes.length).toBeGreaterThan(1);
+    // One byte under the largest batch keeps exactly the largest session out, and a batch built earlier is withdrawn with it.
+    const largest = Math.max(...sizes);
+    expect(sizes.filter((size) => size === largest)).toHaveLength(1);
+    limit.bytes = largest - 1;
+    const pool = wire(OK_RAW);
+    const night = await nightlyPoolSend(here.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', batches: sizes.length - 1, keptForSize: 1 });
+    expect(night).not.toHaveProperty('oversize');
+    expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ outcome: 'sent', keptForSize: 1 });
+    expect(await sentHashes(outbox)).toHaveProperty('size', sizes.length - 1);
+    // With the limit gone the session builds, is sent, and the note holds no keptForSize.
+    limit.bytes = undefined;
+    const again = await nightlyPoolSend(here.deps, wire(OK_RAW).via);
+    expect(again).toMatchObject({ outcome: 'sent', batches: 1 });
+    expect(again).not.toHaveProperty('keptForSize');
+    expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).not.toHaveProperty('keptForSize');
   });
 });

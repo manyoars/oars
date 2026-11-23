@@ -10,6 +10,7 @@ import { ask, currentTerms, DEPOSIT, isBatchRefusal, isObject, networkSender, po
 import { rawStale } from './pool-choices.js';
 import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
+import { numberIn } from './pool-replica.js';
 import { withSendLock } from './pool-send-lock.js';
 import { markSent, retirePulled, sentHashes } from './pool-sent.js';
 import { readState } from './store.js';
@@ -25,6 +26,8 @@ export interface NightlyPool {
   refused?: number;
   /** Batches the pool refused for their size or their parts this night (400 `bad_part`, 413 `too_large`): each stays in the outbox, unsent, and the night went on to the next batch. Set only when there were some. */
   oversize?: number;
+  /** Sessions this night's build kept out of the outbox because their batch would be past the pool's size or part limit (a count only, no names). They stay on this machine, and a session whose batch the pool refuses at send time is counted in `oversize` instead. Set only when there were some. */
+  keptForSize?: number;
   /** Pulled batches removed this night because they now hold a term of the exclusion file. Set only when there were some. */
   removed?: number;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
@@ -71,7 +74,9 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
   // One sender at a time per outbox, the lock `deposit --send` takes: a second run waits, then finds `sent.log` full and sends nothing twice.
   await withSendLock(outbox, async () => {
     // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
-    await poolDeposit(deps, { server, covenant: version });
+    const built = await poolDeposit(deps, { server, covenant: version });
+    const keptForSize = numberIn(built.document, 'oversize') ?? 0;
+    if (keptForSize > 0) tally.keptForSize = keptForSize;
     const done = await sentHashes(outbox);
     // The current stamp's batches, then those `hold pull` filed under another stamp that outlived a vocabulary or field-list change.
     // A pulled batch can wait as long as the covenant stays closed, so each pass reads it against the term file as it is now: one that holds a term goes, and with no terms none is sent.
