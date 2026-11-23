@@ -4,7 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
-- `oars pool deposit --send-all` and the nightly sender no longer stop at a batch the pool refuses for its size or its parts (400 `bad_part`, 413 `too_large`): that batch stays in the outbox, unsent, and is counted as refused for size, and the run goes on to the next batch. `--send-all` still ends non-zero and prints the refused count; every other refusal (sign-in, network, 5xx, `vocabulary_ahead`, `vocabulary_expired`) ends the run as before. The nightly note counts them as `oversize`.
+- `oars pool deposit --send-all` and the nightly sender no longer stop at a batch the pool refuses for its size or its parts (400 `bad_part`, 413 `too_large`): that batch stays in the outbox, unsent, and is counted as refused for its size or parts, and the run goes on to the next batch. `--send-all` still ends non-zero and prints the refused count; every other refusal (sign-in, network, 5xx, `vocabulary_ahead`, `vocabulary_expired`) ends the run as before. The nightly note counts them as `oversize`.
 - `oars pool deposit` keeps a session out for size when its batch would be past the 1,800,000 bytes or 8 parts the pool takes: no batch is written for it, and the output says how many sessions, by number only. The session stays on this machine.
 
 ## 0.5.6 (2026-11-22)

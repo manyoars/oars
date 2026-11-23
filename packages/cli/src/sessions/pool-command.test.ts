@@ -4649,7 +4649,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
       await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status, code }, details: { tally: { sent: 2, refused: 1, failed: 0, left: 0 } } });
       expect(pool.landed).toEqual([hashes[0], hashes[2]]);
       expect(sentLogOf(scene)).toEqual([hashes[0], hashes[2]]);
-      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for size and kept in the outbox.');
+      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for its size or parts and kept in the outbox.');
       expect(scene.h.err.join('') + scene.h.out.join('')).not.toContain('zorblax-session-content');
     });
 
@@ -4665,7 +4665,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
       });
       expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send-all')).not.toBe(ExitCode.OK);
       expect(posts).toBe(3);
-      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for size and kept in the outbox.');
+      expect(scene.h.err.join('')).toContain('Finished: 2 sent, 0 skipped, 0 already sent, 0 failed, 0 left, 1 refused for its size or parts and kept in the outbox.');
       expect(sentLogOf(scene)).toHaveLength(2);
     });
 
@@ -4701,7 +4701,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
       await show(scene);
       const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(201), TOO_LARGE, answer(401, { error: 'unauthorized', message: 'Sign in again.' })] });
       await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ problem: { status: 401 }, details: { tally: { sent: 1, refused: 1, failed: 1, left: 1 } } });
-      expect(scene.h.err.join('')).toContain('Stopped: 1 sent, 0 skipped, 0 already sent, 1 failed, 1 left, 1 refused for size and kept in the outbox.');
+      expect(scene.h.err.join('')).toContain('Stopped: 1 sent, 0 skipped, 0 already sent, 1 failed, 1 left, 1 refused for its size or parts and kept in the outbox.');
       expect(sentLogOf(scene)).toEqual([hashes[0]]);
     });
   });

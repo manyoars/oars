@@ -781,7 +781,7 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
       const handled = new Set<string>();
       // The refused count shows only when there was one, so a run with none reads as it always has.
       const line = (): string =>
-        `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left${tally.refused === 0 ? '' : `, ${String(tally.refused)} refused for size and kept in the outbox`}`;
+        `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left${tally.refused === 0 ? '' : `, ${String(tally.refused)} refused for its size or parts and kept in the outbox`}`;
       // The first refusal of a batch: the run's own error when nothing else ended it.
       let firstRefusal: CliError | undefined;
       let ended: { error: unknown } | undefined;
