@@ -28,7 +28,7 @@ import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { hookRowOf } from './codex-hook.js';
-import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
+import { MAX_PARTS, parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
 import { deposit, derive, loadStore, localSalt, paths, refresh, updatePoolChoices, type PoolChoices } from './store.js';
@@ -1063,13 +1063,13 @@ describe('oars pool deposit', () => {
         expect(outboxFiles(scene)).toHaveLength(1);
         limit.bytes = size - 1;
         scene.h.out.length = 0;
-        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-        expect(scene.document()).toMatchObject({ batched: 0, oversize: 1, withdrawn: 1 });
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, are no longer in the store, or are kept out for size.');
         expect(outboxFiles(scene)).toEqual([]);
         scene.h.out.length = 0;
         expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
         const text = scene.h.out.join('');
-        expect(text).toContain(`1 session kept out for size: the batch would be past the ${String(size - 1)} bytes or 8 parts the pool takes. They stay on this machine and nothing of them is queued.`);
+        expect(text).toContain(`1 session kept out for size: the batch would be past the ${String(size - 1)} bytes or ${String(MAX_PARTS)} parts the pool takes. They stay on this machine and nothing of them is queued.`);
         expect(text).not.toContain('a plain request');
       });
 
@@ -1200,7 +1200,7 @@ plain
         const state = join(scene.staged.storeDir, 'state.json');
         writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['some-other-folder'] }));
         expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, or are no longer in the store.');
+        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, are no longer in the store, or are kept out for size.');
       });
 
       // Nothing is sent from an older spelling: a deposit builds the session's batch again and removes the older file under its key, so a batch written before the wire spelled "not admitted" one way is not left to send.
@@ -4693,6 +4693,15 @@ describe('oars pool deposit --send-all (t1199)', () => {
       const pool = refusedPool(new Set([hashes[1] ?? '']), refusal);
       await expect(poolDeposit(scene.h.deps, all(pool.via, { pause: () => Promise.resolve() }))).rejects.toMatchObject({ details: { tally: { sent: 1, refused: 0, failed: 1, left: 1 } } });
       expect(pool.landed).toEqual([hashes[0]]);
+    });
+
+    it('says their size when two batches are refused', async () => {
+      const scene = await clean();
+      const hashes = plant(scene, 1, 3);
+      await show(scene);
+      const pool = refusedPool(new Set([hashes[0] ?? '', hashes[1] ?? '']), TOO_LARGE);
+      await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ details: { tally: { sent: 1, refused: 2 } } });
+      expect(scene.h.err.join('')).toContain('2 refused for their size or parts and kept in the outbox.');
     });
 
     it('stops with the stop error, counting what was refused before it', async () => {

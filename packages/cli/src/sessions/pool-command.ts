@@ -781,7 +781,7 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
       const handled = new Set<string>();
       // The refused count shows only when there was one, so a run with none reads as it always has.
       const line = (): string =>
-        `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left${tally.refused === 0 ? '' : `, ${String(tally.refused)} refused for its size or parts and kept in the outbox`}`;
+        `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left${tally.refused === 0 ? '' : `, ${String(tally.refused)} refused for ${tally.refused === 1 ? 'its' : 'their'} size or parts and kept in the outbox`}`;
       // The first refusal of a batch: the run's own error when nothing else ended it.
       let firstRefusal: CliError | undefined;
       let ended: { error: unknown } | undefined;
@@ -1178,7 +1178,7 @@ export const poolDeposit = async (
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.oversize === 0 ? [] : [`${String(counts.oversize)} ${counts.oversize === 1 ? 'session' : 'sessions'} kept out for size: the batch would be past the ${String(MAX_ASSEMBLED_BYTES)} bytes or ${String(MAX_PARTS)} parts the pool takes. They stay on this machine and nothing of them is queued.`]),
-    ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
+    ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, are no longer in the store, or are kept out for size.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
     ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
