@@ -20,7 +20,7 @@
 import type { GoldEvaluator } from './gold-arms.js';
 import { derivedSalt } from './machine-ids.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync, rmSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -945,6 +945,9 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
  */
 const FOREGROUND_LOCK: LockOptions = { waitMs: 120_000, staleMs: 600_000 };
 
+/** The signals a lock holder releases its lock on before it ends: Ctrl+C, a kill, and a closed terminal. An abort (out of memory) cannot be caught; the nightly's parent releases that one (`nightly-detached.ts`). */
+const LOCK_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
 /**
  * Runs `work` as the only writer of `state.json` and the observations file. The SessionEnd hooks of parallel sessions and the nightly
  * run each read, extract, and rewrite `state.json`; without this one's `files` and `allow` entries are lost to another's write.
@@ -984,9 +987,22 @@ export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Pr
   // going. This run then must not write what it read at the start (`state.json`'s `allow` and `redactDomains`, the log's rename) over the second
   // run's. A refused read counts as ours, as it does in the release below.
   const held: LockHold = async () => (await readFile(lock, 'utf8').catch((error: unknown) => (isCode(error, 'ENOENT') ? '' : token))) === token;
+  // A signal ends the process without running the `finally` below, which left the lock to a dead pid for the whole stale window (t1586): the lock goes first, synchronously, and the
+  // signal is raised again with this listener gone, so the process ends as the signal says (or as another listener decides).
+  const onSignal = (signal: NodeJS.Signals): void => {
+    for (const name of LOCK_SIGNALS) process.removeListener(name, onSignal);
+    try {
+      if (readFileSync(lock, 'utf8') === token) rmSync(lock, { force: true });
+    } catch {
+      // No lock file, or one that cannot be read: nothing of ours to remove.
+    }
+    process.kill(process.pid, signal);
+  };
+  for (const name of LOCK_SIGNALS) process.on(name, onSignal);
   try {
     return await work(held);
   } finally {
+    for (const name of LOCK_SIGNALS) process.removeListener(name, onSignal);
     clearInterval(heartbeat);
     // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` retries a share violation, and a refusal that outlasts the retries is swallowed so the finished work's result is not lost (the stale window then clears the lock).
     if ((await readFile(lock, 'utf8').catch(() => token)) === token) await rm(lock, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
