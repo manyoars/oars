@@ -7,6 +7,7 @@
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
 //   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
 //   node scripts/sessions-heap.mjs pooldeposit [--sessions 2000] [--runs 2] [--heap 8192]  # `oars pool deposit` (the build, no --send) as a machine (OARS_HOST_CLASS, so no sign-in): peak RSS, smallest passing --max-old-space-size, and a digest of the outbox, per run; pair with --bin for a build from before a change
+//   node scripts/sessions-heap.mjs refresh [--sessions 1600] [--heap 1024] [--least]  # the nightly's refresh (a no-op deposit) on a cell-heavy store under a fixed heap: pass/fail, peak RSS, and with --least the smallest passing heap (t1586)
 //   node scripts/sessions-heap.mjs poolwrite [--cells 1190000] [--runs 3] # peak RSS of the pool's cells in a fresh process each: holding them, writing cells.jsonl, and `poolOf` (no store; a generated store has too few cells)
 //
 // Flags every mode takes:
@@ -15,6 +16,7 @@
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
 //   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names (the first line of the result, so each is its own signature) by the failure's own count, a fixed set (varied)
+//   --shape cells       spread the sessions over many harness versions, models, days, and file kinds, so the pool's cells grow as an operator's do (about 830 a session against 5; `refresh` takes it by default)
 //   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //
 // Needs `npm run build -w packages/cli` first (it runs dist/bin.js, and refuses one older than src/sessions/store.ts unless `--bin` names the build). Nothing here touches the real store or ~/.claude: every run points
@@ -54,6 +56,9 @@ const PROMPTS = 8;
 /** The exception names `--errors varied` cycles through: each is its own error signature. */
 const ERRORS = ['KeyError', 'ValueError', 'TypeError', 'OSError', 'IndexError', 'AttributeError', 'RuntimeError', 'ImportError'];
 const BULK = Number(arg('bulk', '400')) || 400;
+/** The models and file kinds `--shape cells` cycles through. */
+const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-fable-5-2'];
+const EXTENSIONS = ['ts', 'tsx', 'js', 'py', 'go', 'rs', 'java', 'md', 'json', 'yaml', 'sql', 'css'];
 
 /** @typedef {{ file_path?: string, old_string?: string, new_string?: string, command?: string, pattern?: string }} ToolInput */
 /** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
@@ -112,27 +117,36 @@ const transcript = (index) => {
   const chatter = Number(arg('chatter', '5'));
   const calls = Number(arg('calls', '14'));
   const varied = arg('errors', 'one') === 'varied';
-  const base = Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
+  // `--shape cells` spreads the store over the frames and days a long-lived operator's store spans (many harness versions and models, two years of
+  // days, a day per prompt, and varied file kinds), so the pool's cells grow with the sessions as the operator's do: the plain shape makes about 5
+  // cells a session (4,000 at 800), the operator's store about 176 (1.19 million at 6,757).
+  const cellHeavy = arg('shape', process.argv[2] === 'refresh' ? 'cells' : 'plain') === 'cells';
+  const base = cellHeavy ? Date.parse('2025-01-06T08:00:00Z') + (index % 700) * 86_400_000 : Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
+  const version = cellHeavy ? `2.${String(index % 9)}.${String((index * 10) % 230)}` : '2.1.300';
+  /** @param {number} p */
+  const modelOf = (p) => (cellHeavy ? MODELS[(index + p) % MODELS.length] : 'claude-opus-5-5');
+  /** @param {number} p @param {number} c */
+  const extOf = (p, c) => (cellHeavy ? EXTENSIONS[(index + p * 3 + c) % EXTENSIONS.length] : 'ts');
   /** @type {string[]} */
   const lines = [];
   let clock = 0;
   let n = 0;
   /** @param {unknown} value */
   const line = (value) => lines.push(JSON.stringify(value));
-  line({ type: 'attachment', uuid: `${id}-${String(n++)}`, parentUuid: null, timestamp: iso(base, clock), version: '2.1.300', attachment: { type: 'environment', snapshot: { workingDirectory: '/work/app', platform: 'linux' } } });
+  line({ type: 'attachment', uuid: `${id}-${String(n++)}`, parentUuid: null, timestamp: iso(base, clock), version, attachment: { type: 'environment', snapshot: { workingDirectory: '/work/app', platform: 'linux' } } });
   let parent = null;
   for (let p = 0; p < PROMPTS; p += 1) {
-    clock += 5;
+    clock = cellHeavy ? p * 86_400 + 60 : clock + 5;
     const prompt = `${id}-${String(n++)}`;
-    line({ type: 'user', uuid: prompt, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', cwd: '/work/app', gitBranch: 'main', message: { role: 'user', content: `step ${String(p)} of ${id}: fix the failing build in /work/app/src/module-${String(index % 97)}.ts and explain what you changed` } });
+    line({ type: 'user', uuid: prompt, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version, cwd: '/work/app', gitBranch: 'main', message: { role: 'user', content: `step ${String(p)} of ${id}: fix the failing build in /work/app/src/module-${String(index % 97)}.ts and explain what you changed` } });
     parent = prompt;
     for (let c = 0; c < calls; c += 1) {
       const toolId = `toolu_${id}_${String(p)}_${String(c)}`;
       const module = String((index + c) % 211);
       /** @type {[string, ToolInput][]} */
       const inputs = [
-        ['Read', { file_path: `/work/app/src/module-${module}/file-${String(p)}-${String(c)}.ts` }],
-        ['Edit', { file_path: `/work/app/src/module-${module}/file-${String(c)}.ts`, old_string: `old ${id} ${String(c)}`, new_string: `new ${id} ${String(c)}` }],
+        ['Read', { file_path: `/work/app/src/module-${module}/file-${String(p)}-${String(c)}.${extOf(p, c)}` }],
+        ['Edit', { file_path: `/work/app/src/module-${module}/file-${String(c)}.${extOf(p, c)}`, old_string: `old ${id} ${String(c)}`, new_string: `new ${id} ${String(c)}` }],
         ['Bash', { command: `cd /work/app && npm test -- --run src/module-${module} --id ${id}-${String(p)}-${String(c)} 2>&1 | tail -40 && git status --short && git diff --stat -- src/module-${module}` }],
         ['Grep', { pattern: `symbol${String((index * 7 + c) % 503)}` }],
         ['Bash', { command: `git add src/module-${module} && git commit -m "fix module ${module} step ${String(p)}-${String(c)}" && git log --oneline -3` }],
@@ -141,7 +155,7 @@ const transcript = (index) => {
       const [name, input] = inputs[(index + p + c) % inputs.length] ?? ['Read', {}];
       clock += 3;
       const call = `${id}-${String(n++)}`;
-      line({ type: 'assistant', uuid: call, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', requestedModel: 'claude-opus-5-5', requestId: `req_${id}_${String(p)}_${String(c)}`, apiBlockIndex: 0, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: toolId, name, input }], usage: { input_tokens: 10, cache_creation_input_tokens: 200 + c, cache_read_input_tokens: 9000 + c * 40, output_tokens: 100 + c } } });
+      line({ type: 'assistant', uuid: call, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version, requestedModel: modelOf(p), requestId: `req_${id}_${String(p)}_${String(c)}`, apiBlockIndex: 0, message: { role: 'assistant', model: modelOf(p), content: [{ type: 'tool_use', id: toolId, name, input }], usage: { input_tokens: 10, cache_creation_input_tokens: 200 + c, cache_read_input_tokens: 9000 + c * 40, output_tokens: 100 + c } } });
       parent = call;
       clock += 2;
       const failed = (index + p + c) % 6 === 5;
@@ -152,7 +166,7 @@ const transcript = (index) => {
             `Exit code 1\n${ERRORS[Math.floor((index + p + c) / 6) % ERRORS.length]}: 'key-${String(index % 31)}'\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>`
           : `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\nKeyError: 'key-${String(index % 31)}'`
         : `ok ${id} ${'x'.repeat(BULK)}`;
-      line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
+      line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;
       // Lines the skeleton lists and the log does not: the model's text, its thinking, and harness attachments make no tool or prompt row, but a
       // real transcript is mostly these (1.8 MB of transcript against 86 KB of log), and the skeleton holds one entry for each.
@@ -161,10 +175,10 @@ const transcript = (index) => {
         const extra = `${id}-${String(n++)}`;
         const kind = (p + c + k) % 3;
         if (kind === 2) {
-          line({ type: 'attachment', uuid: extra, parentUuid: parent, timestamp: iso(base, clock), version: '2.1.300', attachment: { type: 'hook_success', hookName: 'PostToolUse', content: `ran ${id} ${String(p)}-${String(c)}-${String(k)}` } });
+          line({ type: 'attachment', uuid: extra, parentUuid: parent, timestamp: iso(base, clock), version, attachment: { type: 'hook_success', hookName: 'PostToolUse', content: `ran ${id} ${String(p)}-${String(c)}-${String(k)}` } });
         } else {
           const block = kind === 0 ? { type: 'text', text: `I looked at ${id} step ${String(p)} call ${String(c)} part ${String(k)} and the next change is in src/module-${String(index % 97)}.ts` } : { type: 'thinking', thinking: `reasoning about ${id} ${String(p)}-${String(c)}-${String(k)}`, signature: 'sig' };
-          line({ type: 'assistant', uuid: extra, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', requestedModel: 'claude-opus-5-5', requestId: `req_${id}_${String(p)}_${String(c)}_${String(k)}`, apiBlockIndex: k + 1, message: { role: 'assistant', model: 'claude-opus-5-5', content: [block], usage: { input_tokens: 10, cache_creation_input_tokens: 100 + k, cache_read_input_tokens: 9000 + k * 40, output_tokens: 50 + k } } });
+          line({ type: 'assistant', uuid: extra, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version, requestedModel: modelOf(p), requestId: `req_${id}_${String(p)}_${String(c)}_${String(k)}`, apiBlockIndex: k + 1, message: { role: 'assistant', model: modelOf(p), content: [block], usage: { input_tokens: 10, cache_creation_input_tokens: 100 + k, cache_read_input_tokens: 9000 + k * 40, output_tokens: 50 + k } } });
         }
         parent = extra;
       }
@@ -591,7 +605,46 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
   } finally {
     rmSync(out.root, { recursive: true, force: true });
   }
+} else if (command === 'refresh') {
+  // The nightly's refresh on a store whose pool holds as many cells as the operator's (t1586): a cell-heavy store (`--shape cells` unless named), then a no-op deposit (the scan, the
+  // compaction, and `refresh`: the derive, the pool, and the index) under `--heap`. It fails unless the deposit exits 0 and writes the hook index. With `--least`, it also bisects the
+  // smallest passing heap in 8 MB steps. Pair with `--bin` for a build from before a change.
+  const sessions = Number(arg('sessions', '1600'));
+  const heap = Number(arg('heap', '1024'));
+  const dirs = scratch('refresh');
+  const preload = peakPreload();
+  try {
+    const log = build(dirs, sessions);
+    const cells = readFileSync(join(dirs.store, 'cells.jsonl'), 'utf8').split(NL).length - 1;
+    console.log(`${String(sessions)} sessions: log ${log.toFixed(0)} MB, ${String(cells)} cells (${(cells / sessions).toFixed(0)} a session)`);
+    const index = join(dirs.store, 'hook-index.json');
+    /**
+     * @param {number} heapMb
+     * @param {string | undefined} withPreload
+     */
+    const attempt = (heapMb, withPreload) => {
+      rmSync(index, { force: true });
+      const ran = runCli(dirs, heapMb, depositArgs, withPreload);
+      return { ran, ok: judge(ran, 'zero', sessions).ok && existsSync(index) };
+    };
+    const { ran, ok } = attempt(heap, preload);
+    console.log(`refresh under --max-old-space-size=${String(heap)}: ${ok ? 'ok' : 'FAILED'}, exit ${String(ran.code)}${ran.oom ? ' (out of memory)' : ''}, peak RSS ${String(ran.peakMb)} MB, ${ran.seconds.toFixed(1)} s`);
+    if (!ok) process.exitCode = 1;
+    if (process.argv.includes('--least')) {
+      let low = 24;
+      let high = Math.max(heap, 6144);
+      while (high - low > 8) {
+        const mid = Math.floor((low + high) / 16) * 8;
+        if (attempt(mid, undefined).ok) high = mid;
+        else low = mid;
+      }
+      console.log(`smallest passing heap: ${String(high)} MB (${((high * 1024) / cells).toFixed(2)} KB a cell)`);
+    }
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+    rmSync(join(preload, '..'), { recursive: true, force: true });
+  }
 } else {
-  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep|poolwrite');
+  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep|poolwrite|refresh');
   process.exitCode = 2;
 }

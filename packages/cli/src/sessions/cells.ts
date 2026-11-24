@@ -223,12 +223,12 @@ interface Tally {
   frameBucket: string;
   grain: Grain;
   day: string;
-  sessions: Set<string>;
+  sessions: Distinct;
   ok: number;
   failed: number;
   tokens: number;
   /** The sessions whose tokens `tokens` holds: a step's count only when it recorded a cost, a prompt's only when it recorded input. */
-  recorded: Set<string>;
+  recorded: Distinct;
   /** The prompts (or steps) behind `tokens`, counted where `recorded` gains a session. */
   recordedUnits: number;
   durationMs: number;
@@ -238,7 +238,17 @@ interface Tally {
 /** The usage categories a prompt's tokens add up: thinking is part of the output already billed, so it is not summed. */
 const TOKEN_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output'] as const;
 
-const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, recorded: new Set(), recordedUnits: 0, durationMs: 0, exposure });
+/**
+ * The distinct sessions a tally counts: none, one session's ID, or a set from the second distinct session on. Most cells see one session, and a `Set` for each of a tally's two counts
+ * held about half the refresh heap on a store of a million cells (t1586: 1.3 KB a cell on a generated store, of which the sets' tables were 0.6 KB).
+ */
+type Distinct = string | Set<string> | undefined;
+
+const joined = (held: Distinct, session: string): Distinct => (held === undefined || held === session ? session : typeof held === 'string' ? new Set([held, session]) : held.add(session));
+
+const countOf = (held: Distinct): number => (held === undefined ? 0 : typeof held === 'string' ? 1 : held.size);
+
+const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => ({ motifId, frameBucket, grain, day, sessions: undefined, ok: 0, failed: 0, tokens: 0, recorded: undefined, recordedUnits: 0, durationMs: 0, exposure });
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -275,19 +285,34 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
 /** The tally half of `deriveCells`: `add` one run of sessions, then `finish`. */
 export interface CellFold {
   add: (store: Store) => void;
+  /** Called once, after the last `add`: it lets the tallies go as it makes the cells, so a second call finds none. */
   finish: () => CellSet;
 }
 
 /** `deriveCells` as a fold: each `add` tallies one run of sessions into the same tallies, and `finish` sorts them. The runs must come in the order the whole store holds its rows, so sums of floats match. */
 export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
-  const tallies = new Map<string, Tally>();
+  // By motif, then by the rest of the cell's name: one key of the whole name was a string of about 90 characters a tally, and the rest of a name repeats across motifs, so it is held once.
+  const tallies = new Map<string, Map<string, Tally>>();
   const motifs = new Map<string, Motif>();
-  const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => {
-    const key = `${motif.motifId}/${frameBucket}/${grain}/${day}/${exposure}`;
-    const found = tallies.get(key);
+  // One copy of each bucket, day, and rest of a name a tally holds: each occurrence builds its own string, and a tally kept the first, so a million tallies held a million copies of a few hundred names.
+  const names = new Map<string, string>();
+  const named = (value: string): string => {
+    const found = names.get(value);
     if (found !== undefined) return found;
-    const fresh = newTally(motif.motifId, frameBucket, grain, day, exposure);
-    tallies.set(key, fresh);
+    names.set(value, value);
+    return value;
+  };
+  const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => {
+    const key = `${frameBucket}/${grain}/${day}/${exposure}`;
+    let own = tallies.get(motif.motifId);
+    if (own === undefined) {
+      own = new Map<string, Tally>();
+      tallies.set(motif.motifId, own);
+    }
+    const found = own.get(key);
+    if (found !== undefined) return found;
+    const fresh = newTally(motif.motifId, named(frameBucket), grain, named(day), exposure);
+    own.set(named(key), fresh);
     return fresh;
   };
   /** The tallies one occurrence counts into: its week cell, and for a one-step shape motif with a known day its live cell too (rule 6). A window of two or more steps, a named motif, and a class motif have no day cell. */
@@ -322,14 +347,14 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
         const status = window.at(-1)?.status;
         const covered = placed.slice(start, start + motif.steps.length);
         for (const tally of talliesOf(motif, frame, exposureOf(covered.some(({ exposed }) => exposed), covered.some((step) => 'held' in step && step.held)))) {
-          tally.sessions.add(first.parent);
+          tally.sessions = joined(tally.sessions, first.parent);
           if (status === 'ok') tally.ok += 1;
           if (status === 'error') tally.failed += 1;
           for (const step of window) {
             // A step with no recorded cost has no tokens to count, so it joins neither the sum nor the coverage (its duration is still counted).
             if (step.tokens !== null) {
               tally.tokens += step.tokens;
-              tally.recorded.add(first.parent);
+              tally.recorded = joined(tally.recorded, first.parent);
               tally.recordedUnits += 1;
             }
             tally.durationMs += step.durationMs;
@@ -346,7 +371,7 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
         const motif = classMotif(recoveryClass(code, calls[at]?.steps[0]?.action ?? 'other', followed.next[0] ?? NO_NEXT));
         motifs.set(motif.motifId, motif);
         const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
-        tally.sessions.add(first.parent);
+        tally.sessions = joined(tally.sessions, first.parent);
         tally.failed += 1;
       }
       // The same, keyed by the failed call's target class (`recovery-target.ts`): a week cell per (code, failed action, target class, next step), counting the failed calls the step followed (`failed`) and those where that next call
@@ -364,7 +389,7 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
         const motif = classMotif(recoveryTargetClass(code, failedAction, tool.targetClass, step));
         motifs.set(motif.motifId, motif);
         const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
-        tally.sessions.add(first.parent);
+        tally.sessions = joined(tally.sessions, first.parent);
         tally.failed += 1;
         if (next.status === 'ok') tally.ok += 1;
       }
@@ -375,7 +400,7 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
           const motif = classMotif(shapeClass(action, facet, value));
           motifs.set(motif.motifId, motif);
           const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
-          tally.sessions.add(first.parent);
+          tally.sessions = joined(tally.sessions, first.parent);
           if (tool.status === 'ok') tally.ok += 1;
           if (tool.status === 'error') tally.failed += 1;
         }
@@ -395,11 +420,11 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
               const motif = classMotif(`${prefix}${code}/${name}`);
               motifs.set(motif.motifId, motif);
               const tally = tallyAt(motif, bucket, 'day', failedDay, 'unknown');
-              tally.sessions.add(first.parent);
+              tally.sessions = joined(tally.sessions, first.parent);
               tally.failed += 1;
               if (counted.tokens !== null) {
                 tally.tokens += counted.tokens;
-                tally.recorded.add(first.parent);
+                tally.recorded = joined(tally.recorded, first.parent);
                 tally.recordedUnits += 1;
               }
               tally.durationMs += counted.durationMs;
@@ -415,12 +440,12 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
       const exposure = exposureOf(graph.exposedPrompt(prompt.session, prompt.index), statesExposure(graph) && graph.heldPrompt(prompt.session, prompt.index));
       const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposure, NO_AXES);
       for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposure), ...effort]) {
-        tally.sessions.add(prompt.session);
+        tally.sessions = joined(tally.sessions, prompt.session);
         if (prompt.errors > 0) tally.failed += 1;
         else tally.ok += 1;
         // A prompt that recorded no input has no whole usage to count, and a category it never recorded is a placeholder zero, so neither enters the sum.
         if (observesUsage(prompt, 'input')) {
-          tally.recorded.add(prompt.session);
+          tally.recorded = joined(tally.recorded, prompt.session);
           tally.recordedUnits += 1;
           for (const field of TOKEN_FIELDS) if (observesUsage(prompt, field)) tally.tokens += prompt.usage[field];
         }
@@ -431,9 +456,14 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
 
   const finish = (): CellSet => {
     const stated = statesExposure(graph);
-    const cells = [...tallies.values()]
-      .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || EXPOSURE_CODES[a.exposure] - EXPOSURE_CODES[b.exposure])
-      .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposure === 'shown', ...(stated ? { exposure: tally.exposure } : {}) }));
+    // Last cell first, so each tally is popped (let go) as its cell is made and the tallies and the cells are never both held whole (t1586).
+    const pending = [...tallies.values()].flatMap((own) => [...own.values()]).sort((a, b) => compare(b.motifId, a.motifId) || compare(b.frameBucket, a.frameBucket) || compare(b.grain, a.grain) || compare(b.day, a.day) || EXPOSURE_CODES[b.exposure] - EXPOSURE_CODES[a.exposure]);
+    tallies.clear();
+    const cells: Cell[] = [];
+    for (let tally = pending.pop(); tally !== undefined; tally = pending.pop()) {
+      const recorded = countOf(tally.recorded);
+      cells.push({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: countOf(tally.sessions), clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: recorded === 0 ? null : tally.tokens, tokenSessions: recorded, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposure === 'shown', ...(stated ? { exposure: tally.exposure } : {}) });
+    }
     return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
   };
   return { add, finish };
