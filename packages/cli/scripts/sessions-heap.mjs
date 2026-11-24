@@ -7,7 +7,7 @@
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
 //   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
 //   node scripts/sessions-heap.mjs pooldeposit [--sessions 2000] [--runs 2] [--heap 8192]  # `oars pool deposit` (the build, no --send) as a machine (OARS_HOST_CLASS, so no sign-in): peak RSS, smallest passing --max-old-space-size, and a digest of the outbox, per run; pair with --bin for a build from before a change
-//   node scripts/sessions-heap.mjs refresh [--sessions 1600] [--heap 1024] [--least]  # the nightly's refresh (a no-op deposit) on a cell-heavy store under a fixed heap: pass/fail, peak RSS, and with --least the smallest passing heap (t1586)
+//   node scripts/sessions-heap.mjs refresh [--sessions 1430] [--heap 1024] [--least]  # the nightly's refresh (a no-op deposit) on a cell-heavy store under a fixed heap: pass/fail, peak RSS, and with --least the smallest passing heap (t1586)
 //   node scripts/sessions-heap.mjs poolwrite [--cells 1190000] [--runs 3] # peak RSS of the pool's cells in a fresh process each: holding them, writing cells.jsonl, and `poolOf` (no store; a generated store has too few cells)
 //
 // Flags every mode takes:
@@ -609,7 +609,8 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
   // The nightly's refresh on a store whose pool holds as many cells as the operator's (t1586): a cell-heavy store (`--shape cells` unless named), then a no-op deposit (the scan, the
   // compaction, and `refresh`: the derive, the pool, and the index) under `--heap`. It fails unless the deposit exits 0 and writes the hook index. With `--least`, it also bisects the
   // smallest passing heap in 8 MB steps. Pair with `--bin` for a build from before a change.
-  const sessions = Number(arg('sessions', '1600'));
+  // 1,430 sessions make 1.19 million cells, the operator's count: main ran out of memory there under 1,024 MB, and the lean tallies finish in it.
+  const sessions = Number(arg('sessions', '1430'));
   const heap = Number(arg('heap', '1024'));
   const dirs = scratch('refresh');
   const preload = peakPreload();
