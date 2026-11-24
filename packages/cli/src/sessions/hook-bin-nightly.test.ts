@@ -82,6 +82,22 @@ describe.skipIf(!built)('the built nightly task', () => {
     expect(outcomeOf(folder)).toBe('sent');
   });
 
+  it('still sends, and records the failed derive, when the nightly run throws in its derive', async () => {
+    const pool = await stub(false);
+    const folder = home(pool.origin);
+    const store = join(folder, 'oars', 'sessions');
+    // A folder where derived.json goes: the derive's write throws, after the deposit, as a derive that fails in-process does.
+    mkdirSync(join(store, 'derived.json'));
+    expect(await nightly(folder, pool.origin)).toBe(0);
+    expect(pool.seen).toEqual(['GET /v1/covenant']);
+    const rows = readFileSync(join(store, 'pipeline-runs.jsonl'), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toContainEqual(expect.objectContaining({ trigger: 'nightly', step: 'derive', status: 'error' }));
+    const calls = readFileSync(join(store, 'hook-calls.jsonl'), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    const failed = calls.filter((call) => typeof call === 'object' && call !== null && Reflect.get(call, 'event') === 'nightly' && typeof Reflect.get(call, 'error') === 'string');
+    expect(failed).toHaveLength(1);
+    expect(existsSync(join(store, 'store.lock'))).toBe(false);
+  });
+
   it('makes no request to the pool with no sign-in', async () => {
     const pool = await stub(true);
     const folder = home(undefined);

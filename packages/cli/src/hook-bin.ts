@@ -1,4 +1,4 @@
-// The one entry file the installed hooks and the detached sender run: `node hook-bin.js <session-start|prompt|pre-tool|post-tool|stop|nightly> [--harness <name>]`, with the
+// The one entry file the installed hooks and the detached sender run: `node hook-bin.js <session-start|prompt|pre-tool|post-tool|stop|nightly|nightly-run> [--harness <name>]`, with the
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
@@ -34,7 +34,8 @@ const nightlyPool = async (event: HookEvent): Promise<void> => {
   await nightlyPoolSend(nightlyPoolDeps(process.env, hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }), versionOf(), Date.now));
 };
 
-const eventOf = (name: string | undefined): HookEvent | undefined => HOOK_EVENTS.find((event) => event === name);
+/** `nightly-run` is the nightly run's own process, which `nightly` starts and waits for (`nightly-detached.ts`): its hook event is `nightly`. */
+const eventOf = (name: string | undefined): HookEvent | undefined => (name === 'nightly-run' ? 'nightly' : HOOK_EVENTS.find((event) => event === name));
 
 /** The machine modes: `stop --machine` is the Stop of a cloud VM, a VPS, or a runner (a detached child does the work), and `machine-child` is that child. Neither is a local hook event. */
 const machineModeOf = (argv: readonly string[]): 'stop' | 'child' | undefined => (argv[2] === 'machine-child' ? 'child' : argv[2] === 'stop' && argv.includes('--machine') ? 'stop' : undefined);
@@ -42,6 +43,21 @@ const machineModeOf = (argv: readonly string[]): 'stop' | 'child' | undefined =>
 try {
   const machineMode = machineModeOf(process.argv);
   const event = machineMode === undefined ? eventOf(process.argv[2]) : undefined;
+  // The detached sender: the deposit, derive, and index run in a child of their own, so a derive that runs out of heap cannot take the send with it; the send runs here once that child exits.
+  if (process.argv[2] === 'nightly') {
+    const { detachedNightly, spawnRun } = await import('./sessions/nightly-detached.js');
+    const { spawn } = await import('node:child_process');
+    await detachedNightly({
+      storeDir: hookRuntime('nightly', process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }).storeDir,
+      now: Date.now,
+      run: spawnRun(fileURLToPath(import.meta.url), spawn),
+      send: async () => {
+        // The detached sender is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
+        await sendNightly(process.env, process.platform, homedir(), Date.now);
+        await nightlyPool('nightly');
+      },
+    });
+  }
   if (machineMode === 'stop') {
     const { machineStop } = await import('./sessions/machine-stop.js');
     const { spawn } = await import('node:child_process');
@@ -54,7 +70,7 @@ try {
   }
   // `--harness <name>` says whose hook this is (Copilot's manifest passes it); a name with no dialect is a hook this program cannot answer, so it runs nothing and prints nothing.
   const dialect = dialectOf(harnessFlag(process.argv), process.env, homedir());
-  if (event !== undefined && dialect !== undefined) {
+  if (event !== undefined && dialect !== undefined && process.argv[2] !== 'nightly') {
     const output = await runHook(
       event,
       event === 'nightly' ? '' : await readStdin(),
@@ -69,11 +85,6 @@ try {
     if (event === 'stop') {
       const { afterStop } = await import('./sessions/pool-due.js');
       await afterStop(hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }).storeDir, fileURLToPath(import.meta.url));
-    }
-    // The detached sender is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
-    if (event === 'nightly') {
-      await sendNightly(process.env, process.platform, homedir(), Date.now);
-      await nightlyPool(event);
     }
   }
 } catch {
