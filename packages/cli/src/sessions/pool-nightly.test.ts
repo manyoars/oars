@@ -16,6 +16,7 @@ import { SendLockBusy, withSendLock, type LockFs } from './pool-send-lock.js';
 import { sentHashes } from './pool-sent.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
+import type * as PoolCommand from './pool-command.js';
 import type * as PoolWire from './pool-wire.js';
 
 // A test sets `limit.bytes` to reach the assembled-size limit with a small batch: the client reads the limit from this module (t1582), so the mock hands it that value while it is set.
@@ -30,8 +31,19 @@ vi.mock('./pool-wire.js', async (importOriginal) => {
   };
 });
 
+// A test sets `build.error` to make every build of the outbox throw from then on (t1586), after it has built the outbox the night finds.
+const build = vi.hoisted((): { error: Error | undefined } => ({ error: undefined }));
+vi.mock('./pool-command.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof PoolCommand>();
+  return {
+    ...actual,
+    poolDeposit: (...args: Parameters<typeof actual.poolDeposit>): ReturnType<typeof actual.poolDeposit> => (build.error === undefined ? actual.poolDeposit(...args) : Promise.reject(build.error)),
+  };
+});
+
 afterEach(() => {
   limit.bytes = undefined;
+  build.error = undefined;
 });
 afterEach(cleanup);
 
@@ -834,5 +846,57 @@ describe('the nightly build that keeps a session out for size (t1582 fix round)'
     expect(again).toMatchObject({ outcome: 'sent', batches: 1 });
     expect(again).not.toHaveProperty('keptForSize');
     expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).not.toHaveProperty('keptForSize');
+  });
+});
+
+describe('the nightly send after a build that throws (t1586)', () => {
+  it('still sends the batches already in the outbox, notes that the build failed, and logs its reason to pool-send.log', async () => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const hashes = (await heldAcross(outbox)).batches.map((batch) => batch.hash);
+    expect(hashes.length).toBeGreaterThan(0);
+    build.error = new Error('JavaScript heap out of memory in the build');
+    const pool = wire(OK_RAW);
+    const night = await nightlyPoolSend(here.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', batches: hashes.length, buildFailed: true });
+    expect(paths(pool, 'POST').filter((path) => path === '/v1/deposits')).toHaveLength(hashes.length);
+    expect([...(await sentHashes(outbox))].sort()).toEqual([...hashes].sort());
+    expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ outcome: 'sent', buildFailed: true });
+    expect(readFileSync(join(here.staged.storeDir, 'pool-send.log'), 'utf8')).toContain('JavaScript heap out of memory in the build');
+  });
+
+  it('fails the night and sends nothing when the removed list is damaged, though the build that would have refused it threw first', async () => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    writeFileSync(join(outbox, 'removed.json'), '{ not json');
+    build.error = new Error('the build died');
+    const pool = wire(OK_RAW);
+    expect(await nightlyPoolSend(here.deps, pool.via)).toMatchObject({ outcome: 'failed', batches: 0 });
+    expect(pool.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+  });
+
+  it('never posts the batch of a session on the removed list, even one still in the outbox because no build ran to take it out', async () => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const batches = (await heldAcross(outbox)).batches;
+    const gone = batches[0];
+    expect(batches.length).toBeGreaterThan(1);
+    writeFileSync(join(outbox, 'removed.json'), JSON.stringify({ [gone?.key ?? '']: { hash: gone?.hash ?? '' } }));
+    build.error = new Error('the build died');
+    const pool = wire(OK_RAW);
+    expect(await nightlyPoolSend(here.deps, pool.via)).toMatchObject({ outcome: 'sent', batches: batches.length - 1, buildFailed: true });
+    const posted = pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => batchHash(request.body ?? ''));
+    expect(posted).not.toContain(gone?.hash);
+  });
+
+  it('notes no build failure on a night whose build ran', async () => {
+    const here = await scene('declined');
+    const night = await nightlyPoolSend(here.deps, wire(OK_RAW).via);
+    expect(night.outcome).toBe('sent');
+    expect(night.batches).toBeGreaterThan(0);
+    expect(night).not.toHaveProperty('buildFailed');
   });
 });

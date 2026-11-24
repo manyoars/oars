@@ -9,7 +9,7 @@ import { machineOf } from './machine.js';
 import { ask, currentTerms, DEPOSIT, isBatchRefusal, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
 import { logFailure } from './pool-due.js';
-import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
+import { heldAcross, lockedBatch, outboxFolder, readRemoved, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { numberIn } from './pool-replica.js';
 import { withSendLock } from './pool-send-lock.js';
@@ -31,6 +31,8 @@ export interface NightlyPool {
   keptForSize?: number;
   /** Pulled batches removed this night because they now hold a term of the exclusion file. Set only when there were some. */
   removed?: number;
+  /** Set when this night's build of the outbox threw: the batches already in the outbox were still sent, and the reason is in `pool-send.log`. */
+  buildFailed?: true;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
   rawHeld?: true;
 }
@@ -75,9 +77,19 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
   // One sender at a time per outbox, the lock `deposit --send` takes: a second run waits, then finds `sent.log` full and sends nothing twice.
   await withSendLock(outbox, async () => {
     // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
-    const built = await poolDeposit(deps, { server, covenant: version });
-    const keptForSize = numberIn(built.document, 'oversize') ?? 0;
+    // A build that fails costs this night its new batches only (t1586): the batches already in the outbox passed the same gates when an earlier night built them, and a dead
+    // build must not hold them back night after night. Its reason goes to `pool-send.log`, the note says the build failed, and the send goes on.
+    let keptForSize = 0;
+    try {
+      const built = await poolDeposit(deps, { server, covenant: version });
+      keptForSize = numberIn(built.document, 'oversize') ?? 0;
+    } catch (error) {
+      tally.buildFailed = true;
+      await logFailure(storeDir, deps.now(), error);
+    }
     if (keptForSize > 0) tally.keptForSize = keptForSize;
+    // The send honors `removed.json` itself, since a build that failed may not have read it: a damaged list ends the night before anything is sent, and a removed session's batch is never posted.
+    const removed = new Set(Object.keys(await readRemoved(outbox, DEPOSIT)));
     const done = await sentHashes(outbox);
     // The current stamp's batches, then those `hold pull` filed under another stamp that outlived a vocabulary or field-list change.
     // A pulled batch can wait as long as the covenant stays closed, so each pass reads it against the term file as it is now: one that holds a term goes, and with no terms none is sent.
@@ -86,7 +98,7 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
     let ended: { error: unknown } | undefined;
     try {
       for (const batch of (await heldAcross(outbox)).batches) {
-        if (done.has(batch.hash) || (batch.pulled && !scan.open)) continue;
+        if (done.has(batch.hash) || removed.has(batch.key) || (batch.pulled && !scan.open)) continue;
         // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
         const locked = await lockedBatch(outbox, batch.hash, { requireShown: false, stamp: batch.stamp });
         if (!locked.ok) continue;
