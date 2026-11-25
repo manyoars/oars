@@ -649,7 +649,7 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
       const stdoutLines = traced.stdout.split(NL);
       const peakHeapMb = Math.max(0, ...stdoutLines.flatMap((line) => (gcLine.test(line) ? [Number(/-> ([\d.]+) \(/.exec(line)?.[1] ?? 0)] : [])));
       /** @type {{ liveMb: number, top: { frame: string, mb: number }[], callersOfTop: string[] } | undefined} */
-      const sampled = existsSync(frames) ? JSON.parse(readFileSync(frames, 'utf8')) : undefined;
+      const sampled = existsSync(frames) ? JSON.parse(readFileSync(frames, 'utf8').trim().split(NL).pop() ?? '') : undefined;
       const ran = { ...traced, stdout: stdoutLines.filter((line) => !gcLine.test(line)).join(NL), peakHeapMb: Math.round(peakHeapMb), frames: sampled };
       // A pool that fails to build costs the deposit only a stderr line, so `reads` also asks for the reads file the run derived.
       const derived = command !== 'reads' || (existsSync(join(dirs.store, 'reads')) && readdirSync(join(dirs.store, 'reads')).some((name) => name.endsWith('.jsonl')));

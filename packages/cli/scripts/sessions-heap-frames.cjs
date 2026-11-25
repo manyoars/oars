@@ -1,10 +1,10 @@
 // Preload for `sessions-heap.mjs reads`: names the frames that hold the heap when a run dies of memory. V8's fatal-error report has no JavaScript stack for an
 // out-of-memory death ("No stack."), so this starts V8's sampling heap profiler on the main thread and reads it from a worker thread, whose inspector session is
-// answered between the main thread's instructions even while it runs one synchronous loop. Every two seconds it writes the live heap by allocating frame to the file
-// named by OARS_HEAP_FRAMES (a write from the worker, so the last one survives the main thread's death): the largest frames by the bytes they allocated that are still
-// alive, and the callers of the largest one. The sampling interval (512 KiB) keeps the profiler's own cost small.
+// answered between the main thread's instructions even while it runs one synchronous loop. Every two seconds it appends a line to the file named by OARS_HEAP_FRAMES
+// (a write from the worker, so the last one survives the main thread's death): the seconds since start, the live heap by allocating frame (the largest frames by the
+// bytes they allocated that are still alive), and the callers of the largest one. The sampling interval (512 KiB) keeps the profiler's own cost small.
 'use strict';
-const { writeFileSync } = require('node:fs');
+const { appendFileSync } = require('node:fs');
 const inspector = require('node:inspector');
 const { isMainThread, Worker, workerData } = require('node:worker_threads');
 
@@ -63,7 +63,7 @@ if (isMainThread) {
   session.connectToMainThread();
   setInterval(() => {
     session.post('HeapProfiler.getSamplingProfile', (error, result) => {
-      if (error === null) writeFileSync(out, JSON.stringify(summarize(result.profile.head)));
+      if (error === null) appendFileSync(out, `${JSON.stringify({ s: Math.round(process.uptime()), ...summarize(result.profile.head) })}\n`);
     });
   }, 2000);
 }
