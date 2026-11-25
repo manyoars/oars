@@ -1063,14 +1063,26 @@ describe('oars pool deposit', () => {
         expect(outboxFiles(scene)).toHaveLength(1);
         limit.bytes = size - 1;
         scene.h.out.length = 0;
-        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, are no longer in the store, or are kept out for size.');
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(scene.document()).toMatchObject({ batched: 0, oversize: 1, withdrawn: 1 });
         expect(outboxFiles(scene)).toEqual([]);
         scene.h.out.length = 0;
         expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
         const text = scene.h.out.join('');
         expect(text).toContain(`1 session kept out for size: the batch would be past the ${String(size - 1)} bytes or ${String(MAX_PARTS)} parts the pool takes. They stay on this machine and nothing of them is queued.`);
         expect(text).not.toContain('a plain request');
+      });
+
+      it('says in its removed-batches line that a batch withdrawn for size is one of the reasons', async () => {
+        const size = await plainSize();
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toHaveLength(1);
+        limit.bytes = size - 1;
+        scene.h.out.length = 0;
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, are no longer in the store, or are kept out for size.');
+        expect(outboxFiles(scene)).toEqual([]);
       });
 
       it('says nothing about size when no session is past the limit', async () => {

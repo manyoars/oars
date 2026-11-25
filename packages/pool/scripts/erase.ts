@@ -236,16 +236,20 @@ const keptSkeleton = async (store: EraseStore, account: string, id: string, reas
 
 /**
  * The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed.
- * The pieces of a skeleton past one row are content too, so they are deleted first, and a kept shape past one row is stored in pieces again after the row is updated. A run that stops after the delete leaves a live row holding only its
- * first piece (an unparseable fragment of a skeleton the erasure is about to replace); the same erasure run again finds the row not yet erased, reads that fragment, and finishes with the marker alone, and a later read of the row never
- * joins a piece it does not hold. A run that stops between the update and the re-insert leaves the row erased and holding the first piece of its shape, with no piece after it.
+ * The pieces of a skeleton past one row are content too, so they are deleted first. A kept shape past one row is stored in pieces again: the row is updated with the marker alone, the pieces are inserted, and only then does the row take
+ * the shape's first piece, so a run that stops after the update leaves an erased row that parses (the marker, no shape), never a fragment of JSON that the `erased_on IS NULL` guard would keep a rerun from repairing. A run that stops
+ * after the delete leaves a live row holding only its first piece (an unparseable fragment of a skeleton the erasure is about to replace); the same erasure run again finds the row not yet erased and finishes with the marker alone.
+ * A run that stops between two piece inserts leaves the marker with the pieces written so far, the one window left, and the row holds no content of the erased session in it.
  */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);
   const [first = '', ...rest] = piecesOf(await keptSkeleton(store, account, id, reason));
   await store.run('DELETE FROM deposit_skeleton_rows WHERE account = ? AND id = ?', [account, id]);
-  const changed = await store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [first, dayOf(now), account, id]);
-  if (changed > 0) for (const [at, body] of rest.entries()) await store.run('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, ?, ?)', [account, id, at + 1, body]);
+  const changed = await store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [rest.length > 0 ? markerOf(reason) : first, dayOf(now), account, id]);
+  if (changed > 0 && rest.length > 0) {
+    for (const [at, body] of rest.entries()) await store.run('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, ?, ?)', [account, id, at + 1, body]);
+    await store.run('UPDATE deposits SET skeleton = ? WHERE account = ? AND id = ? AND erased_on = ?', [first, account, id, dayOf(now)]);
+  }
   return changed;
 };
 

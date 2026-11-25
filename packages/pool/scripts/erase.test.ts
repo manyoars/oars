@@ -1708,4 +1708,25 @@ describe('erasing a deposit whose skeleton is stored past one row (t1583)', () =
     await db.prepare('DELETE FROM deposit_skeleton_rows WHERE account = ?').bind(erasedAccount).run();
     await db.prepare("UPDATE deposits SET skeleton = '{\"erased\":\"lawful-request\"}' WHERE account = ?").bind(erasedAccount).run();
   }, 120_000);
+
+  it('leaves an erased row that parses, the marker alone, when a run stops before the first piece of a past-one-row shape is written', async () => {
+    const { account } = await member();
+    const id = '00000000000078ad';
+    const parsed = parseSkeleton(JSON.parse(canonicalBytes(bigSkeleton(id, BIG_CALLS * 4))));
+    if (!parsed.ok) throw new Error('the fixture does not parse');
+    const [first = '', ...rest] = piecesOf(JSON.stringify(parsed.skeleton));
+    expect(rest.length).toBeGreaterThan(0);
+    const db = await pool.db();
+    await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas) VALUES (?, ?, ?, 'skeleton', '[]', '[]')").bind(account, id, first).run();
+    for (const [at, body] of rest.entries()) await db.prepare('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, ?, ?)').bind(account, id, at + 1, body).run();
+    const whole = await store();
+    const stops: EraseStore = {
+      ...whole,
+      run: (sql, binds) => (sql.startsWith('INSERT INTO deposit_skeleton_rows') ? Promise.reject(new Error('the run stopped')) : whole.run(sql, binds)),
+    };
+    await expect(eraseAccount(stops, account, NOW)).rejects.toThrow('the run stopped');
+    const [held] = await all('SELECT skeleton, erased_on FROM deposits WHERE account = ? AND id = ?', account, id);
+    expect(fieldOf(held, 'erased_on')).not.toBeNull();
+    expect(JSON.parse(textOf(held, 'skeleton'))).toEqual({ erased: 'lawful-request' });
+  }, 120_000);
 });

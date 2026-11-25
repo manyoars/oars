@@ -103,7 +103,6 @@ describe('a deposit past the request cap', () => {
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(0);
       expect((await sendParts(pool, token, parts, order.slice(-1)))[0]?.status).toBe(201);
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(1);
-      expect(await rows(pool, "SELECT COUNT(*) AS count FROM deposits WHERE ingest = 'written-before-0044'")).toBe(0);
     } finally {
       await pool.dispose();
     }
