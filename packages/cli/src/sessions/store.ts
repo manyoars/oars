@@ -21,6 +21,7 @@ import type { GoldEvaluator } from './gold-arms.js';
 import { derivedSalt } from './machine-ids.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream, readFileSync, rmSync } from 'node:fs';
+import { constants } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -996,7 +997,12 @@ export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Pr
     } catch {
       // No lock file, or one that cannot be read: nothing of ours to remove.
     }
-    process.kill(process.pid, signal);
+    // Windows emulates only SIGINT, SIGTERM, SIGKILL, and SIGQUIT, so raising a closed console's SIGHUP again throws ENOSYS there: the process then ends with the code a shell gives that signal.
+    try {
+      process.kill(process.pid, signal);
+    } catch {
+      process.exit(128 + constants.signals[signal]);
+    }
   };
   for (const name of LOCK_SIGNALS) process.on(name, onSignal);
   try {

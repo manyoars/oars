@@ -2,16 +2,17 @@
 // `nightly-detached.test.ts` covers the parent that releases that one.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withLock } from './store.js';
 
 const storeJs = fileURLToPath(new URL('../../dist/sessions/store.js', import.meta.url));
 
 const made: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
@@ -32,6 +33,27 @@ describe('the store lock on exit', () => {
       }),
     ).rejects.toThrow('derive ran out of something');
     expect(existsSync(join(folder, 'store.lock'))).toBe(false);
+  });
+
+  // Windows emulates only SIGINT, SIGTERM, SIGKILL, and SIGQUIT, so raising a closed console's SIGHUP again throws ENOSYS there: the lock is already gone, and the process ends with the signal's exit code instead of an uncaught exception.
+  it('ends with 128 plus the signal number when the signal cannot be raised again', async () => {
+    const folder = store();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('kill ENOSYS'), { code: 'ENOSYS' });
+    });
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    let finish = (): void => undefined;
+    const run = withLock(folder, () => new Promise<void>((resolve) => {
+      finish = resolve;
+      process.emit('SIGHUP', 'SIGHUP');
+    }));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(128 + constants.signals.SIGHUP);
+    });
+    expect(kill).toHaveBeenCalledWith(process.pid, 'SIGHUP');
+    expect(existsSync(join(folder, 'store.lock'))).toBe(false);
+    finish();
+    await run;
   });
 
   it.skipIf(!existsSync(storeJs) || process.platform === 'win32')('is gone after a holder is ended by SIGTERM, and the process still ends by that signal', async () => {
