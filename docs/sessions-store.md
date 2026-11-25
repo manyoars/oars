@@ -628,7 +628,7 @@ written when the step ends. It carries no `cv` of its own, so it needs no captur
 
 A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed
 deposit leaves `state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, `derive`
-`error`, and `index` `skipped`; an index write that fails logs `deposit` and `derive` `ok`, then `index` `error` (the records
+`error`, and `pool` and `index` `skipped`; an index write that fails logs `deposit`, `derive`, and `pool` `ok`, then `index` `error` (the records
 and `state.json` stand; the next deposit rebuilds the derived files and the index). A pool that fails logs `pool` `error` with its first line, and the run still writes the index without the pool's reads. A key that fails on three runs in a row
 is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open streaks, and an `ok` run on
 the same key under another trigger ends that key's streak too, so a sweep deposit that fails every time is stuck although

@@ -251,10 +251,10 @@ export const inputKey = (trigger: Trigger, requested: readonly string[], domains
 
 /**
  * Runs a deposit and logs its rows: `deposit` with the records it wrote by kind, then, when it ended with the whole-store pass,
- * `derive` and `index` (spec 4.1: one row per step at a nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
+ * `derive`, `pool`, and `index` (spec 4.1: one row per step at a nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
  * it was asked to deposit), so the failed row and the ok row of one deposit carry the same key and a failure that recovers is not stuck.
- * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it and for the index (spec 4.4). A derive that fails
- * after the deposit wrote its records logs `deposit` ok, `derive` error, and `index` skipped; a pool build that fails logs `pool` error and the run
+ * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it, the pool, and the index (spec 4.4). A derive that fails
+ * after the deposit wrote its records logs `deposit` ok, `derive` error, and `pool` and `index` skipped; a pool build that fails logs `pool` error and the run
  * goes on to the index, which is written without the pool's reads; an index that fails logs `derive` ok and then `index` error; the failure goes on to the caller. The SessionEnd hook runs
  * `withDerive` false: derive follows at the nightly run.
  */

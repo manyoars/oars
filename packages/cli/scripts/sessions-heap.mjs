@@ -17,7 +17,7 @@
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
 //   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names (the first line of the result, so each is its own signature) by the failure's own count, a fixed set (varied)
-//   --tools <n>         tool names per boundary the reads mode spreads over its cells (default 400; t1619)
+//   --tools <n>         the long tail's size: n skill names and n web hosts spread over the steps (default 400 in reads, else 0; t1619)
 //   --shape cells       spread the sessions over many harness versions, models, days, and file kinds, so the pool's cells grow as an operator's do (about 830 a session against 5; `refresh` takes it by default)
 //   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //

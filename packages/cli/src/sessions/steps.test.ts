@@ -970,7 +970,8 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly');
     expect(nightly.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['pool', 'error'], ['index', 'ok']]);
     const pool = nightly.find((entry) => entry.step === 'pool');
-    expect(pool?.error).toMatch(/EISDIR/);
+    // The errno differs by platform (EISDIR on Linux, EPERM from the rename on Windows); the row carries whatever the failing write threw.
+    expect(pool?.error).toMatch(/EISDIR|EPERM|cells\.jsonl/);
     expect(pool?.key).toBe(nightly.find((entry) => entry.step === 'derive')?.key);
   });
 
