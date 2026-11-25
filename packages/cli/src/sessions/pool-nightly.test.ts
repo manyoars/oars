@@ -899,15 +899,18 @@ describe('the nightly send after a build that throws (t1586)', () => {
         choices.folders.proj = 'off';
       });
     }],
-    ['a folder taken off the allowlist', async (here: Scene): Promise<void> => {
+    ['a folder taken off the allowlist', (here: Scene): Promise<void> => {
       const file = join(here.staged.storeDir, 'state.json');
       writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), allow: ['elsewhere'] }));
+      return Promise.resolve();
     }],
-    ['a new exclusion term', async (here: Scene): Promise<void> => {
+    ['a new exclusion term', (here: Scene): Promise<void> => {
       writeFileSync(join(here.staged.root, 'terms.txt'), 'zorblax\nquuxbar\n');
+      return Promise.resolve();
     }],
-    ['a damaged gates record', async (here: Scene): Promise<void> => {
+    ['a damaged gates record', (here: Scene): Promise<void> => {
       writeFileSync(join(outboxFolder(here.staged.storeDir, POOL), 'gates.json'), '{ not json');
+      return Promise.resolve();
     }],
   ])('sends nothing after %s since the last build, when the build that would apply it throws, and says why', async (_change, change) => {
     const here = await scene('granted');

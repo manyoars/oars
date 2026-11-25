@@ -41,19 +41,17 @@ describe('the store lock on exit', () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
       throw Object.assign(new Error('kill ENOSYS'), { code: 'ENOSYS' });
     });
-    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-    let finish = (): void => undefined;
-    const run = withLock(folder, () => new Promise<void>((resolve) => {
-      finish = resolve;
+    // The real exit would end the test worker: the stand-in throws what it was asked for, which rejects the holder's work as the end of the process would have ended it.
+    const exit = vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`exit ${String(code)}`);
+    });
+    const run = withLock(folder, () => new Promise<void>(() => {
       process.emit('SIGHUP', 'SIGHUP');
     }));
-    await vi.waitFor(() => {
-      expect(exit).toHaveBeenCalledWith(128 + constants.signals.SIGHUP);
-    });
+    await expect(run).rejects.toThrow(`exit ${String(128 + constants.signals.SIGHUP)}`);
+    expect(exit).toHaveBeenCalledWith(128 + constants.signals.SIGHUP);
     expect(kill).toHaveBeenCalledWith(process.pid, 'SIGHUP');
     expect(existsSync(join(folder, 'store.lock'))).toBe(false);
-    finish();
-    await run;
   });
 
   it.skipIf(!existsSync(storeJs) || process.platform === 'win32')('is gone after a holder is ended by SIGTERM, and the process still ends by that signal', async () => {
