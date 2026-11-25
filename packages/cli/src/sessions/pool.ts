@@ -71,16 +71,17 @@ export const deriveFirstOrder = (pool: Pool, store: Store, folds?: ReadFolds): R
   return FIRST_ORDER_FAMILIES.flatMap((family) => made(byFamily[family]({ pool, store, ...(folds === undefined ? {} : { folds }) }), asOf, orderOf));
 };
 
-/** Order 1, then each stage of `relations` over everything before it. */
+/** Order 1, then each stage of `relations` over everything before it. One list grows stage by stage: a stage's reads join it after the whole stage has read it, so no stage sees its own. */
 export const deriveReads = (pool: Pool, store: Store, folds?: ReadFolds): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
-  return relations().reduce<Read[]>((known, stage) => {
+  const known = deriveFirstOrder(pool, store, folds);
+  for (const stage of relations()) {
     const orderOf = orderResolver(known);
-    return [...known, ...stage.flatMap((derive) => made(derive(known), asOf, orderOf))];
-  }, deriveFirstOrder(pool, store, folds));
+    const found = stage.flatMap((derive) => made(derive(known), asOf, orderOf));
+    for (const read of found) known.push(read);
+  }
+  return known;
 };
-
-export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'family' in value;
 const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value && 'grain' in value;
@@ -160,6 +161,9 @@ const jsonLines = function* (rows: Iterable<unknown>): Generator<string> {
 /** `cells.jsonl`: one JSON line a cell, the bytes `serializeCells` makes, written in pieces (t1403's synthetic 284 MB file: one string of it held about 1,000 MB more than the cells). */
 export const writeCells = (file: string, cells: readonly Cell[]): Promise<void> => writeLines(file, jsonLines(cells));
 
+/** A pool version's reads file: one JSON line a read, in derived order, written in pieces as `cells.jsonl` is, never as one string of the whole file. */
+export const writeReads = (file: string, reads: readonly Read[]): Promise<void> => writeLines(file, jsonLines(reads));
+
 /**
  * The current pool's reads: already written when this pool has been read before, else derived and written once. `store` holds the sessions, subagents, and errors; the rows of every turn are read through
  * `folds`, which a refresh folds run by run. Without them `store` is taken whole, with its prompts and tools, and folded as one run.
@@ -176,7 +180,7 @@ export const refreshPool = async (storeDir: string, store: Store, folds?: PoolFo
   const stored = await readStored(file);
   if (stored !== undefined) return { pool, reads: stored };
   const reads = deriveReads(pool, store, readFolds);
-  await writeAtomic(file, serializeReads(reads));
+  await writeReads(file, reads);
   return { pool, reads };
 };
 

@@ -46,16 +46,28 @@ const pairCandidate = (boundary: Boundary, rising: string, falling: string): Can
 /** Both moves point the way the read claims: `moved` asks only that each is large, not its sign. */
 const opposed = ({ gates }: Candidate): boolean => gates.every((gate) => gate.value > 0);
 
-/** The pairs a store's change reads allow, above the floor, whether or not any of them moved. */
-export const substitutionCandidates = (reads: readonly Read[]): Candidate[] =>
-  boundariesOf(reads).flatMap((boundary) => {
+/**
+ * The pairs a store's change reads allow, above the floor, whether or not any of them moved: each ordered pair of one level's tools at each boundary, rising before falling in
+ * the boundary's tool order. They are made one at a time, since a boundary of k tools at one level makes k(k - 1) of them, and the screen keeps only the few that move.
+ */
+export const substitutionCandidates = function* (reads: readonly Read[]): Generator<Candidate> {
+  for (const boundary of boundariesOf(reads)) {
     const keys = toolsAt(boundary);
-    return keys.flatMap((rising) =>
-      keys.filter((falling) => falling !== rising && levelOf(falling) === levelOf(rising)).flatMap((falling) => {
+    const byLevel = new Map<string, string[]>();
+    for (const key of keys) {
+      const level = levelOf(key);
+      const same = byLevel.get(level);
+      if (same === undefined) byLevel.set(level, [key]);
+      else same.push(key);
+    }
+    for (const rising of keys) {
+      for (const falling of byLevel.get(levelOf(rising)) ?? []) {
+        if (falling === rising) continue;
         const candidate = pairCandidate(boundary, rising, falling);
-        return candidate === undefined ? [] : [candidate];
-      }),
-    );
-  });
+        if (candidate !== undefined) yield candidate;
+      }
+    }
+  }
+};
 
 export const deriveSubstitution: DeriveRelation = (reads) => screen(substitutionCandidates(reads), opposed);

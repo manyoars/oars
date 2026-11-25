@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clearsZero, differenceOf, estimateOf, MIN_MOVE, moved, relate, TRIALS_FLOOR, trialsOf, type Estimate } from './read-order.js';
+import { clearsZero, differenceOf, estimateOf, MIN_MOVE, moved, relate, screen, TRIALS_FLOOR, trialsOf, type Candidate, type Estimate } from './read-order.js';
 import { makeRead, orderResolver, type Read, type ReadDraft, type ReadInterval } from './read.js';
 
 const ASOF = { pool: 'pool-one', day: '2026-11-02' };
@@ -155,5 +155,47 @@ describe('a chain of orders 1 to 3', () => {
     expect(third).toBeDefined();
     expect(second[0]?.n).toBe(TRIALS_FLOOR);
     expect(second[0] === undefined ? 0 : trialsOf(second[0])).toBe(TRIALS_FLOOR);
+  });
+});
+
+describe('screen', () => {
+  // A generator of seeded candidates: some clear zero only at a small count of comparisons, some at any count, some never. The first gate's value sets the claim's sign.
+  const seeded = function* (count: number): Generator<Candidate> {
+    let seed = 7;
+    const next = (): number => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    for (let at = 0; at < count; at += 1) {
+      const gates = [0, 1].map((): Estimate => {
+        const value = Math.round((next() - 0.5) * 2000) / 10000;
+        const half = Math.round(next() * 300) / 10000;
+        return { value, interval: span(value - half, value + half) };
+      });
+      const body = relate('substitution', [firstOrder(`m${String(at)}`)], { slice: { at: String(at) }, value: { offset: gates[0]?.value ?? 0 }, interval: span(0, 1) });
+      if (body !== undefined) yield { gates, body };
+    }
+  };
+  /** The screen as it was before t1619: over the whole list at once. */
+  const whole = (candidates: readonly Candidate[], claims: (candidate: Candidate) => boolean): unknown[] => {
+    const tested = candidates.length;
+    return candidates.filter((candidate) => claims(candidate) && candidate.gates.every((gate) => moved(gate, tested))).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
+  };
+  const positive = ({ gates }: Candidate): boolean => gates.every((gate) => gate.value > 0);
+
+  it('takes its candidates one at a time and keeps what the whole-list screen keeps, in the same order and with the same count', () => {
+    const screened = screen(seeded(5000), positive);
+    expect(screened).toEqual(whole([...seeded(5000)], positive));
+    expect(screened.length).toBeGreaterThan(5);
+    expect(screened.every(({ value }) => value.tested === 5000)).toBe(true);
+    // Some candidates pass at the count reached part way and fail at the whole count: the screen lets them go at the end.
+    const early = [...seeded(5000)].filter((candidate, at) => positive(candidate) && candidate.gates.every((gate) => moved(gate, at + 1)));
+    expect(early.length).toBeGreaterThan(screened.length);
+  });
+
+  it('screens a list as before, and nothing at all to nothing', () => {
+    const list = [...seeded(300)];
+    expect(screen(list)).toEqual(whole(list, () => true));
+    expect(screen([])).toEqual([]);
   });
 });

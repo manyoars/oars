@@ -16,7 +16,8 @@ export interface NotReadable {
 export const notReadable = (reads: readonly Read[]): NotReadable[] => {
   const rows: NotReadable[] = [{ family: 'version-boundary', what: 'a model version boundary', why: 'a cell holds a model name and no version of it' }];
   const noBoundary = boundariesOf(reads).length === 0;
-  const whyNot = (candidates: readonly Candidate[]): string | undefined => (noBoundary ? 'no harness has two version buckets' : candidates.length === 0 ? 'no comparison clears the floor' : undefined);
+  // Only whether there is a first candidate: the substitution pairs are made one at a time, and listing them all would hold every ordered pair at once.
+  const whyNot = (candidates: Iterable<Candidate>): string | undefined => (noBoundary ? 'no harness has two version buckets' : candidates[Symbol.iterator]().next().done === true ? 'no comparison clears the floor' : undefined);
   const boundaryWhy = whyNot(versionBoundaryCandidates(reads));
   if (boundaryWhy !== undefined) rows.push({ family: 'version-boundary', what: 'a harness version boundary', why: boundaryWhy });
   const substitutionWhy = whyNot(substitutionCandidates(reads));

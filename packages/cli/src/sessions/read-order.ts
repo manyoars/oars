@@ -92,8 +92,19 @@ export const candidateOf = (family: Family, inputs: readonly Read[], gates: read
   return body === undefined ? undefined : { gates, body };
 };
 
-/** The reads that survive the screen over everything compared, each stating how many comparisons that was: `tested * 0.05` is what chance alone would offer an unscreened reader. */
-export const screen = (candidates: readonly Candidate[], claims: (candidate: Candidate) => boolean = () => true): ReadBody[] => {
-  const tested = candidates.length;
-  return candidates.filter((candidate) => claims(candidate) && candidate.gates.every((gate) => moved(gate, tested))).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
+/**
+ * The reads that survive the screen over everything compared, each stating how many comparisons that was: `tested * 0.05` is what chance alone would offer an unscreened reader.
+ * The candidates are taken one at a time and only the ones that could still survive are kept: a screen over more comparisons is never easier to pass, so a candidate that fails
+ * at the count so far fails at the whole count too. A family whose comparisons grow as pairs (substitution: every ordered pair of one level's tools at each boundary) is never
+ * held whole (t1619: about 2,650 MB of candidates on one operator's store, unfinished when the heap ran out).
+ */
+export const screen = (candidates: Iterable<Candidate>, claims: (candidate: Candidate) => boolean = () => true): ReadBody[] => {
+  let tested = 0;
+  const passes = (candidate: Candidate): boolean => candidate.gates.every((gate) => moved(gate, tested));
+  const kept: Candidate[] = [];
+  for (const candidate of candidates) {
+    tested += 1;
+    if (claims(candidate) && passes(candidate)) kept.push(candidate);
+  }
+  return kept.filter(passes).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
 };
