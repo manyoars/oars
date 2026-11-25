@@ -642,12 +642,13 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
       if (command === 'reads') rmSync(join(dirs.store, 'reads'), { recursive: true, force: true });
       const frames = join(dirs.root, 'frames.json');
       rmSync(frames, { force: true });
-      // `reads` also asks V8 for its collections (the most live heap after one is the peak heap below) and samples the live heap by allocating frame (`sessions-heap-frames.cjs`), so a run that dies of memory names the frames holding it.
+      // `reads` also asks V8 for its collections (the most live heap after a full one is the peak heap below) and samples the live heap by allocating frame (`sessions-heap-frames.cjs`), so a run that dies of memory names the frames holding it.
       const reading = command === 'reads' && withPreload !== undefined;
       const traced = runCli(dirs, heapMb, depositArgs, withPreload, false, reading ? { OARS_HEAP_FRAMES: frames } : {}, reading ? ['--trace-gc', '--require', join(cliRoot, 'scripts', 'sessions-heap-frames.cjs')] : []);
       const gcLine = /^\[\d+:0x[0-9a-f]+\]/;
       const stdoutLines = traced.stdout.split(NL);
-      const peakHeapMb = Math.max(0, ...stdoutLines.flatMap((line) => (gcLine.test(line) ? [Number(/-> ([\d.]+) \(/.exec(line)?.[1] ?? 0)] : [])));
+      // After a full collection only: a scavenge's figure still holds the old generation's garbage.
+      const peakHeapMb = Math.max(0, ...stdoutLines.flatMap((line) => (gcLine.test(line) && line.includes('Mark-Compact') ? [Number(/-> ([\d.]+) \(/.exec(line)?.[1] ?? 0)] : [])));
       /** @type {{ liveMb: number, top: { frame: string, mb: number }[], callersOfTop: string[] } | undefined} */
       const sampled = existsSync(frames) ? JSON.parse(readFileSync(frames, 'utf8').trim().split(NL).pop() ?? '') : undefined;
       const ran = { ...traced, stdout: stdoutLines.filter((line) => !gcLine.test(line)).join(NL), peakHeapMb: Math.round(peakHeapMb), frames: sampled };
