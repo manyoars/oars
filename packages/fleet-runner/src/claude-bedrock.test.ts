@@ -280,10 +280,18 @@ describe('prepare', () => {
   });
 
   it('a setup step past its own limit is an error the runner sees, and the folder is deleted', async () => {
-    const r = rig({ setupTimeLimitMs: 1 });
+    // No process is started: the spawn double reports what nodeSpawn reports when its timer fires, so the case never waits on the OS to kill and reap a real child (t1638).
+    const r = rig({ setupTimeLimitMs: 7 });
     const roots: string[] = [];
-    const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
-    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/timed out/);
+    const seen: number[] = [];
+    const spawn: Spawn = (spec) => {
+      seen.push(spec.timeoutMs);
+      return Promise.resolve({ exitCode: null, signal: 'SIGKILL', stdout: '', stderr: '', timedOut: true, errorCode: null });
+    };
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn, onTempFolder: (dir) => roots.push(dir) });
+    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/timed out after 7 ms/);
+    expect(seen).toEqual([7]);
+    expect(roots).toHaveLength(1);
     expect(existsSync(roots[0] ?? '')).toBe(false);
   });
 
