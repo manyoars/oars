@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serializeCells, type Cell } from './cells.js';
 import type { Motif } from './motif.js';
-import { poolFiles, refreshPool } from './pool.js';
+import { poolFiles, refreshPool, writeReads } from './pool.js';
 import { poolFoldsOf, type PoolFolds } from './pool-fold.js';
 import { prompt, session, store, tool } from './pool-fixture.js';
 
@@ -117,6 +117,23 @@ describe('refreshPool writes the pool files in bounded pieces', () => {
     expect(whole.charCodeAt(CHUNK)).toBe(emoji.charCodeAt(1));
     await refreshPool(dir, one, folded(padded, []));
     expect(readFileSync(files.cells, 'utf8')).toBe(whole);
+  });
+
+  it('writes a pool version\'s reads file in bounded pieces, one JSON line a read in derived order: the bytes one joined string of them made (t1619)', async () => {
+    const dir = storeDir();
+    const { pool, reads } = await refreshPool(dir, one);
+    const file = poolFiles(dir).reads(pool.version);
+    const joined = (list: typeof reads): string => list.map((read) => `${JSON.stringify(read)}\n`).join('');
+    expect(reads.length).toBeGreaterThan(0);
+    expect(readFileSync(file, 'utf8')).toBe(joined(reads));
+    // Enough reads to span several pieces: the derived ones, over and over.
+    const many = Array.from({ length: Math.ceil((4 * BOUND) / Buffer.byteLength(joined(reads))) }, () => reads).flat();
+    const larger = join(dir, 'reads', 'larger.jsonl');
+    await writeReads(larger, many);
+    expect(readFileSync(larger, 'utf8')).toBe(joined(many));
+    const pieces = writtenTo(larger);
+    expect(pieces.length).toBeGreaterThanOrEqual(3);
+    expect(Math.max(...pieces)).toBeLessThanOrEqual(BOUND);
   });
 
   it('writes an empty pool as two empty files', async () => {
