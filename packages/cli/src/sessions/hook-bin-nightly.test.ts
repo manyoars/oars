@@ -82,6 +82,8 @@ describe.skipIf(!built)('the built nightly task', () => {
     expect(outcomeOf(folder)).toBe('sent');
   });
 
+  // A regression guard, not the red proof of the split: a derive that throws was already caught in-process before t1586, so this passes either way. The red proof is
+  // `nightly-detached.test.ts`, whose faked child ends by SIGABRT as an out-of-memory abort does, and the send still runs in the parent.
   it('still sends, and records the failed derive, when the nightly run throws in its derive', async () => {
     const pool = await stub(false);
     const folder = home(pool.origin);
