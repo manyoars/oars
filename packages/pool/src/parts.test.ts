@@ -5,6 +5,7 @@ import { BIG_CALLS, bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { MAX_ASSEMBLED_BYTES, MAX_PARTS, parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { MAX_STAGED_BATCHES, receivePart, STAGED_MAX_AGE_MS } from './parts.js';
+import { SKELETON_ROW_BYTES } from './skeleton-rows.js';
 import type { Bound, Env } from './http.js';
 import { acceptanceOf, poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
@@ -102,6 +103,7 @@ describe('a deposit past the request cap', () => {
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(0);
       expect((await sendParts(pool, token, parts, order.slice(-1)))[0]?.status).toBe(201);
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(1);
+      expect(await rows(pool, "SELECT COUNT(*) AS count FROM deposits WHERE ingest = 'written-before-0044'")).toBe(0);
     } finally {
       await pool.dispose();
     }
@@ -469,6 +471,65 @@ describe('a skeleton past one stored row (t1583)', () => {
       await pool.dispose();
     }
   }, 300_000);
+
+  it('refuses a batch whose extensions bag fills a row, in parts: 413 too_large, no deposit row, no piece, and no staged part left (a request of one is past the request cap first)', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9104');
+      const id = '0000000000001586';
+      // Each unknown top-level field goes to the bag as sent, up to 8 KiB an entry: enough of them leave the skeleton no room beside the bag in a row.
+      const padded = (count: number): string => {
+        const fields = Object.fromEntries(Array.from({ length: count }, (_, at) => [`pad${String(at).padStart(4, '0')}`, 'x'.repeat(8000)]));
+        return canonicalBytes({ ...bigSkeleton(id, 10), ...fields });
+      };
+      const full = padded(240);
+      // Whole, the request is past the 1 MiB request cap before the bag is ever read, since the bag is no larger than what was sent; the room check is reached only through a join.
+      expect(new TextEncoder().encode(full).length).toBeGreaterThan(CAP);
+      expect(await pool.post('/v1/deposits', full, token)).toMatchObject({ status: 413, json: { error: 'too_large' } });
+      const parts = partsOf(full);
+      const batch = sha(full);
+      const answers: Answer[] = [];
+      for (const [at, part] of parts.entries()) answers.push(await pool.post('/v1/deposits', part, token, partHeaders(batch, at + 1, parts.length)));
+      expect(answers.at(-1)).toMatchObject({ status: 413, json: { error: 'too_large' } });
+      expect(JSON.stringify(answers.at(-1))).toContain(`extensions hold at most ${String(SKELETON_ROW_BYTES)} bytes`);
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(0);
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_skeleton_rows')).toBe(0);
+      // The refusal is the batch's own, so its parts are forgotten and not kept for a retry that would change nothing.
+      expect(await rows(pool, `SELECT COUNT(*) AS count FROM deposit_parts WHERE batch = '${batch}'`)).toBe(0);
+      // A bag that leaves room is stored: the same fields, fewer of them.
+      const fits = padded(100);
+      const fitParts = partsOf(fits, 600_000);
+      const fitAnswers: Answer[] = [];
+      for (const [at, part] of fitParts.entries()) fitAnswers.push(await pool.post('/v1/deposits', part, token, partHeaders(sha(fits), at + 1, fitParts.length)));
+      expect(fitAnswers.at(-1)).toMatchObject({ status: 201, json: { ok: true, id } });
+    } finally {
+      await pool.dispose();
+    }
+  }, 300_000);
+
+  it('resends a row stored before pieces existed (a full skeleton in the row, no piece) unchanged, and moves no cell', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9105');
+      const id = '0000000000001587';
+      const text = canonicalBytes(bigSkeleton(id, 200));
+      expect(await pool.post('/v1/deposits', text, token)).toMatchObject({ status: 201 });
+      const db = await pool.db();
+      // A deposit row cannot be deleted (a ledger trigger), so the row is rewritten in place as an earlier release left it: the whole skeleton in the row, a mark of its own, and no piece beside it.
+      await db.prepare("UPDATE deposits SET ingest = 'written-before-0044'").run();
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_skeleton_rows')).toBe(0);
+      const cells = async (): Promise<string> => JSON.stringify((await db.prepare('SELECT key, sessions, ok, failed, tokens FROM cells ORDER BY key').all()).results);
+      const held = await cells();
+      expect(held).not.toBe('[]');
+      expect(await pool.post('/v1/deposits', text, token)).toMatchObject({ status: 201 });
+      expect(await cells()).toBe(held);
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(1);
+      // The resend replaced the row (a new mark), so it was read and written, not skipped.
+      expect(await rows(pool, "SELECT COUNT(*) AS count FROM deposits WHERE ingest = 'written-before-0044'")).toBe(0);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
 });
 
 describe('staging is bounded (S12, t958)', () => {

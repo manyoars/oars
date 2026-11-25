@@ -128,6 +128,24 @@ describe('pull-deposits', () => {
     expect(files.get(`${account}/projects/deposit/${sha('{"line":1}\n')}.jsonl`)).toBe('{"line":1}\n');
   });
 
+  it('joins a skeleton stored past one row (its first piece in the row, the rest in deposit_skeleton_rows) whole, and leaves a one-row deposit beside it as it was (t1583)', async () => {
+    const account = await seeded({ deposits: [{ id: 'd1' }, { id: 'd2' }] });
+    const db = await pool.db();
+    // `d2` holds its first piece in the row, and pieces 1 and 2 beside it, written out of order so only the piece number puts them right.
+    await db.prepare('UPDATE deposits SET skeleton = ? WHERE account = ? AND id = ?').bind('{"id":"d2","first":"[1]"', account, 'd2').run();
+    await db.batch([
+      db.prepare('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, 2, ?)').bind(account, 'd2', ',"third":"[3]"}'),
+      db.prepare('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, 1, ?)').bind(account, 'd2', ',"second":"[2]"'),
+    ]);
+    const { folder, files } = memory();
+    const done = await pullDeposits(await store(), folder);
+    expect(done.failed).toEqual([]);
+    expect(jsonl(files.get(`${account}/deposits.jsonl`))).toEqual([
+      { id: 'd1', tier: 'skeleton', counted_at: 2000, request_country: 'US', skeleton: '{"id":"d1"}' },
+      { id: 'd2', tier: 'skeleton', counted_at: 2000, request_country: 'US', skeleton: '{"id":"d2","first":"[1]","second":"[2]","third":"[3]"}' },
+    ]);
+  });
+
   it('writes the stored link of each Raw Copy that has one to links.jsonl, and none for an older row (t1252)', async () => {
     const linked = await seeded({ deposits: [{ id: 'd1' }], raw: [{ text: 'linked copy', link: { deposit: 'd1', place: 0 } }, { text: 'older copy' }] });
     const older = await seeded({ raw: [{ text: 'only older copy' }] });

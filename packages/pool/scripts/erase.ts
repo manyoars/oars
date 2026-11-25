@@ -236,8 +236,9 @@ const keptSkeleton = async (store: EraseStore, account: string, id: string, reas
 
 /**
  * The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed.
- * The pieces of a skeleton past one row are content too, so they are deleted; a kept shape past one row is stored in pieces again. A run that stops between the row and its pieces leaves the row erased and its old pieces, which no
- * read joins to an erased row (`storedSkeleton`, the export's marker), and a later run of the same erasure finds the row erased and changes nothing, so the pieces are deleted first.
+ * The pieces of a skeleton past one row are content too, so they are deleted first, and a kept shape past one row is stored in pieces again after the row is updated. A run that stops after the delete leaves a live row holding only its
+ * first piece (an unparseable fragment of a skeleton the erasure is about to replace); the same erasure run again finds the row not yet erased, reads that fragment, and finishes with the marker alone, and a later read of the row never
+ * joins a piece it does not hold. A run that stops between the update and the re-insert leaves the row erased and holding the first piece of its shape, with no piece after it.
  */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);

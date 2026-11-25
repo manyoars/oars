@@ -1,11 +1,14 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { admittedNative, bucketOf, isHarness, PACKAGE_REGISTRIES, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
+import { canonicalBytes } from '../../cli/src/sessions/pool-outbox.js';
+import { BIG_CALLS, bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
+import { admittedNative, bucketOf, isHarness, PACKAGE_REGISTRIES, parseSkeleton, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
 import { FRAMEWORKS, LANGUAGES, projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
+import { piecesOf, SKELETON_ROW_BYTES } from '../src/skeleton-rows.js';
 import { PANEL_COUNT } from '../src/stored.js';
 import { sweepPacks } from '../src/pack-operator.js';
 import { acceptanceOf, fieldOf, poolDbOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
@@ -1674,4 +1677,35 @@ describe('erasing a deposit whose skeleton is stored past one row (t1583)', () =
     expect(await markers()).toBe(shapes + 1);
     expect(await pieces()).toBe(before);
   }, 60_000);
+
+  it('stores a kept anonymous shape that is itself past one row in pieces again, joined it is the whole shape, and nothing of the old pieces stays', async () => {
+    const { account } = await member();
+    const id = '00000000000078ac';
+    const parsed = parseSkeleton(JSON.parse(canonicalBytes(bigSkeleton(id, BIG_CALLS * 4))));
+    if (!parsed.ok) throw new Error('the fixture does not parse');
+    const text = JSON.stringify(parsed.skeleton);
+    const shape = JSON.stringify(anonymizeSkeleton(JSON.parse(text), 'lawful-request'));
+    // The fixture must hold the case: a skeleton past one row whose anonymous shape is past one row too.
+    expect(new TextEncoder().encode(shape).length).toBeGreaterThan(SKELETON_ROW_BYTES);
+    const [first = '', ...rest] = piecesOf(text);
+    expect(rest.length).toBeGreaterThan(0);
+    const db = await pool.db();
+    await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas) VALUES (?, ?, ?, 'skeleton', '[]', '[]')").bind(account, id, first).run();
+    for (const [at, body] of rest.entries()) await db.prepare('INSERT INTO deposit_skeleton_rows (account, id, piece, body) VALUES (?, ?, ?, ?)').bind(account, id, at + 1, body).run();
+    const before = await pieces();
+    await eraseAccount(await store(), account, NOW);
+    const kept = await all("SELECT account, id, piece, body FROM deposit_skeleton_rows WHERE account LIKE 'erased:%' ORDER BY piece");
+    const [moved] = kept;
+    const erasedAccount = textOf(moved, 'account');
+    const erasedId = textOf(moved, 'id');
+    const head = textOf((await all('SELECT skeleton FROM deposits WHERE account = ? AND id = ?', erasedAccount, erasedId))[0], 'skeleton');
+    expect(`${head}${kept.map((row) => textOf(row, 'body')).join('')}`).toBe(shape);
+    // Each piece of the old skeleton is gone, and what is held is the shape's own count of pieces, none over a row.
+    expect(kept).toHaveLength(piecesOf(shape).length - 1);
+    expect(await pieces()).toBe(before - rest.length + kept.length);
+    for (const row of kept) expect(new TextEncoder().encode(textOf(row, 'body')).length).toBeLessThanOrEqual(SKELETON_ROW_BYTES);
+    // The erased row's first piece is a fragment of JSON, which the shared pool's later queries on erased rows would trip over, and a deposit row cannot be deleted (a ledger trigger): the shape is replaced by the marker and its pieces go.
+    await db.prepare('DELETE FROM deposit_skeleton_rows WHERE account = ?').bind(erasedAccount).run();
+    await db.prepare("UPDATE deposits SET skeleton = '{\"erased\":\"lawful-request\"}' WHERE account = ?").bind(erasedAccount).run();
+  }, 120_000);
 });
