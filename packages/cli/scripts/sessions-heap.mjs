@@ -56,11 +56,13 @@ const PROMPTS = 8;
 /** The exception names `--errors varied` cycles through: each is its own error signature. */
 const ERRORS = ['KeyError', 'ValueError', 'TypeError', 'OSError', 'IndexError', 'AttributeError', 'RuntimeError', 'ImportError'];
 const BULK = Number(arg('bulk', '400')) || 400;
+/** Names in the long tail `--tools` adds (0: none). The `reads` mode takes 400 unless named. */
+const TOOLS = Number(arg('tools', process.argv[2] === 'reads' ? '400' : '0'));
 /** The models and file kinds `--shape cells` cycles through. */
 const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-fable-5-2'];
 const EXTENSIONS = ['ts', 'tsx', 'js', 'py', 'go', 'rs', 'java', 'md', 'json', 'yaml', 'sql', 'css'];
 
-/** @typedef {{ file_path?: string, old_string?: string, new_string?: string, command?: string, pattern?: string }} ToolInput */
+/** @typedef {{ file_path?: string, old_string?: string, new_string?: string, command?: string, pattern?: string, skill?: string, url?: string, prompt?: string }} ToolInput */
 /** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
 
 /**
@@ -120,7 +122,7 @@ const transcript = (index) => {
   // `--shape cells` spreads the store over the frames and days a long-lived operator's store spans (many harness versions and models, two years of
   // days, a day per prompt, and varied file kinds), so the pool's cells grow with the sessions as the operator's do: the plain shape makes about 5
   // cells a session (4,000 at 800), the operator's store about 176 (1.19 million at 6,757).
-  const cellHeavy = arg('shape', process.argv[2] === 'refresh' ? 'cells' : 'plain') === 'cells';
+  const cellHeavy = arg('shape', ['refresh', 'reads'].includes(process.argv[2] ?? '') ? 'cells' : 'plain') === 'cells';
   const base = cellHeavy ? Date.parse('2025-01-06T08:00:00Z') + (index % 700) * 86_400_000 : Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
   const version = cellHeavy ? `2.${String(index % 9)}.${String((index * 10) % 230)}` : '2.1.300';
   /** @param {number} p */
@@ -152,6 +154,12 @@ const transcript = (index) => {
         ['Bash', { command: `git add src/module-${module} && git commit -m "fix module ${module} step ${String(p)}-${String(c)}" && git log --oneline -3` }],
         ['Bash', { command: `rg -n "symbol${String(c)}" src/module-${module} | head -20; sed -n 1,40p src/module-${module}/file-${String(c)}.ts` }],
       ];
+      // `--tools <n>` adds a long tail of named steps, a skill run and a web fetch out of n names each, so a version bucket holds many keys at one level, as an
+      // operator's does (many skills, hosts, and commands); the substitution read compares every ordered pair of them at each boundary.
+      if (TOOLS > 0) {
+        const tail = (index * 13 + p * 7 + c * 3) % TOOLS;
+        inputs.push(['Skill', { skill: `bench-skill-${String(tail)}` }], ['WebFetch', { url: `https://docs-${String((tail * 5 + 1) % TOOLS)}.example.org/page`, prompt: 'read it' }]);
+      }
       const [name, input] = inputs[(index + p + c) % inputs.length] ?? ['Read', {}];
       clock += 3;
       const call = `${id}-${String(n++)}`;
@@ -220,20 +228,22 @@ const folderMb = (folder) => readdirSync(folder).reduce((sum, name) => sum + siz
  * @param {string} [preload]
  * @param {boolean} [recapture]
  * @param {{ [name: string]: string }} [extraEnv] added to the run's environment (a machine's `OARS_HOST_CLASS`)
+ * @param {string[]} [nodeFlags] more node flags (the frame sampler's preload)
+ * @param {string} [cli] the build to run, `bin` unless named
  *
  * Runs the built CLI under `--max-old-space-size=<heapMb>` (default heap when 0). With `--require` of a preload that prints the child's
  * peak RSS on exit, the figure reaches `peakMb`. With `recapture`, every file in `state.json` is first marked as captured by an older
  * version, as a CAPTURE_VERSION bump does, so a deposit reads and captures every transcript instead of skipping them all.
  */
-const runCli = (dirs, heapMb, args, preload, recapture = false, extraEnv = {}) => {
+const runCli = (dirs, heapMb, args, preload, recapture = false, extraEnv = {}, nodeFlags = [], cli = bin) => {
   assertScratch(dirs);
   // Each measured run starts from the stored form: a deposit compacts the log and moves the state, and a later run would see a clean one.
   if (existsSync(join(dirs.root, 'clean.jsonl'))) restore(dirs, recapture);
   // A run that died of memory leaves its lock behind (the next deposit would wait ten minutes for it to age out).
   rmSync(join(dirs.store, 'store.lock'), { force: true });
   const started = Date.now();
-  const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
-  const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: { ...envOf(dirs), ...extraEnv }, encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
+  const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload]), ...nodeFlags];
+  const child = spawnSync(process.execPath, [...flags, cli, ...args], { env: { ...envOf(dirs), ...extraEnv }, encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
   const peak = /PEAK_RSS_MB (\d+)/.exec(child.stderr)?.[1];
   return { code: child.status, seconds: (Date.now() - started) / 1000, peakMb: peak === undefined ? null : Number(peak), stdout: child.stdout, stderr: child.stderr, oom: /heap out of memory|FATAL ERROR/.test(child.stderr) };
 };
@@ -266,8 +276,11 @@ const build = (dirs, sessions) => {
   // The first deposit leaves state.json, and any command after it would start a detached background sweep in this store; the recorded opt-out keeps one from racing the measured runs, which delete store.lock and rewrite the log.
   mkdirSync(dirs.store, { recursive: true });
   writeFileSync(join(dirs.store, 'schedule.json'), JSON.stringify({ schedule: 'off' }));
-  const made = runCli(dirs, 8192, depositArgs);
+  // `reads` builds with this checkout's dist whatever `--bin` names: a build from before t1619 dies deriving the pool's reads of its own store, even under 8,192 MB.
+  const made = process.argv[2] === 'reads' ? runCli(dirs, 8192, depositArgs, undefined, false, {}, [], join(cliRoot, 'dist', 'bin.js')) : runCli(dirs, 8192, depositArgs);
   if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
+  // A pool that could not be built leaves the deposit's exit at 0 and says so in one stderr line: the store is still built, so it is shown and the run goes on.
+  for (const said of made.stderr.split(NL).filter((line) => line.startsWith('oars: '))) console.log(`building the store: ${said.slice(0, 400)}`);
   copyFileSync(join(dirs.store, 'observations.jsonl'), join(dirs.root, 'clean.jsonl'));
   copyFileSync(join(dirs.store, 'state.json'), join(dirs.root, 'clean-state.json'));
   const clean = sizeMb(join(dirs.root, 'clean.jsonl'));
@@ -605,7 +618,7 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
   } finally {
     rmSync(out.root, { recursive: true, force: true });
   }
-} else if (command === 'refresh') {
+} else if (command === 'refresh' || command === 'reads') {
   // The nightly's refresh on a store whose pool holds as many cells as the operator's (t1586): a cell-heavy store (`--shape cells` unless named), then a no-op deposit (the scan, the
   // compaction, and `refresh`: the derive, the pool, and the index) under `--heap`. It fails unless the deposit exits 0 and writes the hook index. With `--least`, it also bisects the
   // smallest passing heap in 8 MB steps. Pair with `--bin` for a build from before a change.
@@ -625,11 +638,28 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
      */
     const attempt = (heapMb, withPreload) => {
       rmSync(index, { force: true });
-      const ran = runCli(dirs, heapMb, depositArgs, withPreload);
-      return { ran, ok: judge(ran, 'zero', sessions).ok && existsSync(index) };
+      // `reads` measures the derivation of the pool's reads (t1619): the build's deposit wrote this pool's reads file, and a run that finds it reads it instead of deriving.
+      if (command === 'reads') rmSync(join(dirs.store, 'reads'), { recursive: true, force: true });
+      const frames = join(dirs.root, 'frames.json');
+      rmSync(frames, { force: true });
+      // `reads` also asks V8 for its collections (the most live heap after one is the peak heap below) and samples the live heap by allocating frame (`sessions-heap-frames.cjs`), so a run that dies of memory names the frames holding it.
+      const reading = command === 'reads' && withPreload !== undefined;
+      const traced = runCli(dirs, heapMb, depositArgs, withPreload, false, reading ? { OARS_HEAP_FRAMES: frames } : {}, reading ? ['--trace-gc', '--require', join(cliRoot, 'scripts', 'sessions-heap-frames.cjs')] : []);
+      const gcLine = /^\[\d+:0x[0-9a-f]+\]/;
+      const stdoutLines = traced.stdout.split(NL);
+      const peakHeapMb = Math.max(0, ...stdoutLines.flatMap((line) => (gcLine.test(line) ? [Number(/-> ([\d.]+) \(/.exec(line)?.[1] ?? 0)] : [])));
+      /** @type {{ liveMb: number, top: { frame: string, mb: number }[], callersOfTop: string[] } | undefined} */
+      const sampled = existsSync(frames) ? JSON.parse(readFileSync(frames, 'utf8')) : undefined;
+      const ran = { ...traced, stdout: stdoutLines.filter((line) => !gcLine.test(line)).join(NL), peakHeapMb: Math.round(peakHeapMb), frames: sampled };
+      // A pool that fails to build costs the deposit only a stderr line, so `reads` also asks for the reads file the run derived.
+      const derived = command !== 'reads' || (existsSync(join(dirs.store, 'reads')) && readdirSync(join(dirs.store, 'reads')).some((name) => name.endsWith('.jsonl')));
+      return { ran, ok: judge(ran, 'zero', sessions).ok && existsSync(index) && derived };
     };
     const { ran, ok } = attempt(heap, preload);
-    console.log(`refresh under --max-old-space-size=${String(heap)}: ${ok ? 'ok' : 'FAILED'}, exit ${String(ran.code)}${ran.oom ? ' (out of memory)' : ''}, peak RSS ${String(ran.peakMb)} MB, ${ran.seconds.toFixed(1)} s`);
+    const heapNote = command === 'reads' ? `, peak live heap ${String(ran.peakHeapMb)} MB` : '';
+    // The last sample before the end: on a death of memory, what held the heap as it died.
+    const frameNote = ok || ran.frames === undefined ? '' : `${NL}  live heap by allocating frame, last sample (${String(ran.frames.liveMb)} MB sampled): ${ran.frames.top.map(({ frame, mb }) => `${frame} ${String(mb)} MB`).join(', ')}${NL}  called from: ${ran.frames.callersOfTop.join(' < ')}`;
+    console.log(`refresh under --max-old-space-size=${String(heap)}: ${ok ? 'ok' : 'FAILED'}, exit ${String(ran.code)}${ran.oom ? ' (out of memory)' : ''}, peak RSS ${String(ran.peakMb)} MB${heapNote}, ${ran.seconds.toFixed(1)} s${frameNote}`);
     if (!ok) process.exitCode = 1;
     if (process.argv.includes('--least')) {
       let low = 24;
@@ -646,6 +676,6 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
     rmSync(join(preload, '..'), { recursive: true, force: true });
   }
 } else {
-  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep|poolwrite|refresh');
+  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep|poolwrite|refresh|reads');
   process.exitCode = 2;
 }
