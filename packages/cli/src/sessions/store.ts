@@ -786,8 +786,8 @@ const writeDerived = async (storeDir: string, derive: DeriveFold, store: Store, 
 };
 
 /**
- * Rewrites `derived.json` (the derive step), then the hook index (the index step), from the whole store. With a trace, a failure of
- * either is recorded on it instead of thrown, so the caller can log the deposit that already wrote its records, then the failed step
+ * Rewrites `derived.json` (the derive step), then the reads pool (the pool step), then the hook index (the index step), from the whole store. With a trace, a failure of
+ * any is recorded on it instead of thrown (a pool failure as `poolFailure`, and the run goes on to the index), so the caller can log the deposit that already wrote its records, then the failed step
  * (spec 3.1: one row per step, a failed derive leaving the index skipped), and rethrow.
  */
 export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace, held: LockHold = () => Promise.resolve(true)): Promise<void> => {

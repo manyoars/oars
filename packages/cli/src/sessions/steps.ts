@@ -270,6 +270,7 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
     await logFailure(context, 'deposit', performance.now() - started, key, error);
     if (withDerive) {
       await tryLog(() => logSkipped(context, 'derive'));
+      await tryLog(() => logSkipped(context, 'pool'));
       await tryLog(() => logSkipped(context, 'index'));
     }
     throw error;
@@ -294,6 +295,7 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
   if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   if (failure !== undefined) {
     await logFailure(context, 'derive', failure.ms, failure.key, failure.error);
+    await tryLog(() => logSkipped(context, 'pool'));
     await tryLog(() => logSkipped(context, 'index'));
     throw failure.error;
   }

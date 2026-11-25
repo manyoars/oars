@@ -49,7 +49,7 @@ export const releaseDeadLock = async (storeDir: string, pid: number): Promise<bo
 /**
  * Runs the nightly run in its own process, then the send. A run that exits clean wrote its own rows (`runHook` records a throw as a `nightly` hook call with its error, and `runDeposit`
  * records the failed step), so this adds nothing. A run that died (exit code other than 0, or a signal) wrote neither: this records the `nightly` hook call with the reason and the failed
- * run's step rows as `runDeposit` records a failed run (the deposit's error, then the derive and the index skipped), and releases the lock the dead process held. Never throws.
+ * run's step rows as `runDeposit` records a failed run (the deposit's error, then the derive, the pool, and the index skipped), and releases the lock the dead process held. Never throws.
  */
 export const detachedNightly = async (deps: DetachedNightlyDeps): Promise<RunExit | Error> => {
   const started = deps.now();
@@ -61,6 +61,7 @@ export const detachedNightly = async (deps: DetachedNightlyDeps): Promise<RunExi
     const context = newContext(deps.storeDir, deps.now, 'nightly');
     await tryLog(() => logStep(context, 'deposit', 'error', ms, { in: {}, out: {}, key: null }, reason));
     await tryLog(() => logSkipped(context, 'derive'));
+    await tryLog(() => logSkipped(context, 'pool'));
     await tryLog(() => logSkipped(context, 'index'));
     if (!(ended instanceof Error) && ended.pid !== undefined) await releaseDeadLock(deps.storeDir, ended.pid);
   }

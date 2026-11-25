@@ -151,11 +151,11 @@ describe('the steps each command logs', () => {
     await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow('EISDIR');
     await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow('EISDIR');
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'error'], ['derive', 'skipped'], ['index', 'skipped'], ['deposit', 'error'], ['derive', 'skipped'], ['index', 'skipped']]);
+    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'error'], ['derive', 'skipped'], ['pool', 'skipped'], ['index', 'skipped'], ['deposit', 'error'], ['derive', 'skipped'], ['pool', 'skipped'], ['index', 'skipped']]);
     expect(rows[0]?.error).toMatch(/^EISDIR/);
     expect(rows[0]?.error).not.toContain('\n');
     expect(rows[1]?.key).toBeNull();
-    expect(rows[0]?.key).toBe(rows[3]?.key);
+    expect(rows[0]?.key).toBe(rows[4]?.key);
     expect(rows[0]?.in).toEqual({});
     expect(rows[0]?.out).toEqual({});
     expect(rows[1]?.in).toEqual({});
@@ -463,8 +463,8 @@ describe('the steps each hook logs', () => {
     const staged = await deposited();
     breakState(staged);
     await runHook('nightly', '{}', staged.runtime, () => NOW);
-    const rows = (await readSteps(staged.storeDir)).slice(-3);
-    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'error'], ['derive', 'nightly', 'skipped'], ['index', 'nightly', 'skipped']]);
+    const rows = (await readSteps(staged.storeDir)).slice(-4);
+    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'error'], ['derive', 'nightly', 'skipped'], ['pool', 'nightly', 'skipped'], ['index', 'nightly', 'skipped']]);
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', '--']));
   });
 
@@ -526,7 +526,7 @@ describe('a failed step and its key', () => {
     await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow('EISDIR');
     const rows = await readSteps(staged.storeDir);
     expect(rows.filter((entry) => entry.step === 'deposit' && entry.status === 'error')).toHaveLength(1);
-    expect(rows.map((entry) => entry.step)).toEqual(['deposit', 'derive', 'index']);
+    expect(rows.map((entry) => entry.step)).toEqual(['deposit', 'derive', 'pool', 'index']);
   });
 
   it('the derive key is set when the store cannot be loaded during the derive pass, and the failure carries its time', async () => {
@@ -551,7 +551,7 @@ describe('a failed step and its key', () => {
       }),
     ).rejects.toThrow('derive broke');
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.status, entry.ms])).toEqual([['deposit', 'ok', expect.any(Number)], ['derive', 'error', 40], ['index', 'skipped', 0]]);
+    expect(rows.map((entry) => [entry.step, entry.status, entry.ms])).toEqual([['deposit', 'ok', expect.any(Number)], ['derive', 'error', 40], ['pool', 'skipped', 0], ['index', 'skipped', 0]]);
     // The deposit row is the run's wall time less the derive's 40 ms, so the two rows do not double count.
     expect(rows[0]?.ms).toBeLessThanOrEqual(performance.now() - before - 40 + 1);
   });
@@ -595,7 +595,7 @@ describe('a failed step and its key', () => {
     mkdirSync(join(staged.storeDir, 'derived.json'), { recursive: true });
     await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow();
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'error'], ['index', 'skipped']]);
+    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'error'], ['pool', 'skipped'], ['index', 'skipped']]);
     expect(rows[0]?.out.session).toBeGreaterThan(0);
     // The key is the loaded store's high-water mark (each session at its rev) and the extractor version, not the error text (store.ts refresh).
     const store = await loadStore(staged.storeDir);
@@ -709,7 +709,7 @@ describe('recall --context, the deposit key, and the index step', () => {
     const staged = stage();
     mkdirSync(join(staged.storeDir, 'derived.json'), { recursive: true });
     await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow();
-    expect((await readSteps(staged.storeDir)).map((entry) => [entry.step, entry.status, entry.key])).toEqual([['deposit', 'ok', expect.any(String)], ['derive', 'error', expect.any(String)], ['index', 'skipped', null]]);
+    expect((await readSteps(staged.storeDir)).map((entry) => [entry.step, entry.status, entry.key])).toEqual([['deposit', 'ok', expect.any(String)], ['derive', 'error', expect.any(String)], ['pool', 'skipped', null], ['index', 'skipped', null]]);
   });
 
   it('three failed verifies and then a good one: the good verify is not itself stuck, and --strict passes', async () => {

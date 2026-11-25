@@ -52,6 +52,7 @@ describe('detachedNightly', () => {
     expect(pick(rows(folder, 'pipeline-runs.jsonl'), 'trigger', 'step', 'status', 'error')).toEqual([
       { trigger: 'nightly', step: 'deposit', status: 'error', error: reason },
       { trigger: 'nightly', step: 'derive', status: 'skipped', error: null },
+      { trigger: 'nightly', step: 'pool', status: 'skipped', error: null },
       { trigger: 'nightly', step: 'index', status: 'skipped', error: null },
     ]);
     expect(existsSync(join(folder, 'store.lock'))).toBe(false);

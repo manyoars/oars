@@ -8,6 +8,7 @@
 //   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
 //   node scripts/sessions-heap.mjs pooldeposit [--sessions 2000] [--runs 2] [--heap 8192]  # `oars pool deposit` (the build, no --send) as a machine (OARS_HOST_CLASS, so no sign-in): peak RSS, smallest passing --max-old-space-size, and a digest of the outbox, per run; pair with --bin for a build from before a change
 //   node scripts/sessions-heap.mjs refresh [--sessions 1430] [--heap 1024] [--least]  # the nightly's refresh (a no-op deposit) on a cell-heavy store under a fixed heap: pass/fail, peak RSS, and with --least the smallest passing heap (t1586)
+//   node scripts/sessions-heap.mjs reads [--sessions 1080] [--heap 2048] [--tools 400] [--least]  # the nightly's refresh through the pool step's reads derivation under a fixed heap (t1619)
 //   node scripts/sessions-heap.mjs poolwrite [--cells 1190000] [--runs 3] # peak RSS of the pool's cells in a fresh process each: holding them, writing cells.jsonl, and `poolOf` (no store; a generated store has too few cells)
 //
 // Flags every mode takes:
@@ -16,6 +17,7 @@
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
 //   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names (the first line of the result, so each is its own signature) by the failure's own count, a fixed set (varied)
+//   --tools <n>         tool names per boundary the reads mode spreads over its cells (default 400; t1619)
 //   --shape cells       spread the sessions over many harness versions, models, days, and file kinds, so the pool's cells grow as an operator's do (about 830 a session against 5; `refresh` takes it by default)
 //   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //
