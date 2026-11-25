@@ -96,16 +96,18 @@ describe('the step-log row schema (spec 3.1)', () => {
 });
 
 describe('the steps each command logs', () => {
-  it('a manual deposit appends a deposit, a derive, and an index row, trigger manual, sharing one run', async () => {
+  it('a manual deposit appends a deposit, a derive, a pool, and an index row, trigger manual, sharing one run', async () => {
     const staged = stage();
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'manual', 'ok'], ['derive', 'manual', 'ok'], ['index', 'manual', 'ok']]);
+    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'manual', 'ok'], ['derive', 'manual', 'ok'], ['pool', 'manual', 'ok'], ['index', 'manual', 'ok']]);
     expect(rows[0]?.run).toBe(rows[1]?.run);
     expect(rows[2]?.run).toBe(rows[1]?.run);
+    expect(rows[3]?.run).toBe(rows[1]?.run);
     expect(rows[2]?.key).toBe(rows[1]?.key);
-    expect(rows[2]?.out).toEqual({ signature: 1, project: 1 });
-    expect(rows[2]?.in).toEqual({ session: 4, subagent: 0, error: 6 });
+    expect(rows[3]?.key).toBe(rows[1]?.key);
+    expect(rows[3]?.out).toEqual({ signature: 1, project: 1 });
+    expect(rows[3]?.in).toEqual({ session: 4, subagent: 0, error: 6 });
     expect(rows[0]?.cv).toBe(CAPTURE_VERSION);
     expect(rows[0]?.ev).toBe(EXTRACTOR_VERSION);
     expect(rows[0]?.at).toBe('2026-06-10T00:00:00.000Z');
@@ -116,12 +118,13 @@ describe('the steps each command logs', () => {
     // A second deposit with nothing changed has the same deposit key, so the repeat is visible, and writes nothing.
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
     const again = await readSteps(staged.storeDir);
-    expect(again).toHaveLength(6);
-    expect(again[3]?.key).toBe(rows[0]?.key);
-    expect(again[3]?.in).toEqual({ transcript: 4 });
-    expect(again[3]?.out).toEqual({});
-    expect(again[4]?.key).toBe(rows[1]?.key);
-    expect(again[5]?.key).toBe(rows[2]?.key);
+    expect(again).toHaveLength(8);
+    expect(again[4]?.key).toBe(rows[0]?.key);
+    expect(again[4]?.in).toEqual({ transcript: 4 });
+    expect(again[4]?.out).toEqual({});
+    expect(again[5]?.key).toBe(rows[1]?.key);
+    expect(again[6]?.key).toBe(rows[2]?.key);
+    expect(again[7]?.key).toBe(rows[3]?.key);
   });
 
   it('a step row carries no home folder: a path under it is reduced to <home>', async () => {
@@ -366,18 +369,18 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--', 'corp.example']));
   });
 
-  it('the nightly run appends a deposit, a derive, and an index row, trigger nightly; with nothing saved it reads every folder', async () => {
+  it('the nightly run appends a deposit, a derive, a pool, and an index row, trigger nightly; with nothing saved it reads every folder', async () => {
     const staged = await deposited();
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'ok'], ['derive', 'nightly', 'ok'], ['index', 'nightly', 'ok']]);
+    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'ok'], ['derive', 'nightly', 'ok'], ['pool', 'nightly', 'ok'], ['index', 'nightly', 'ok']]);
     expect(rows[0]?.run).toBe(rows[1]?.run);
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--']));
     expect(rows[0]?.in).toEqual({ transcript: 4 });
     expect(rows[0]?.out).toEqual({});
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
-    expect((await readSteps(empty.storeDir)).map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['index', 'ok']]);
+    expect((await readSteps(empty.storeDir)).map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['pool', 'ok'], ['index', 'ok']]);
   });
 
   it('a deposit that reads Cursor sessions tallies their records by kind in the step row', async () => {
@@ -691,15 +694,15 @@ describe('recall --context, the deposit key, and the index step', () => {
     expect(inputKey('stop', ['t.jsonl'], [])).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'stop', 't.jsonl', '--']));
   });
 
-  it('a manual deposit whose index cannot be written logs deposit ok, derive ok, then index error with the shared key, and rethrows', async () => {
+  it('a manual deposit whose index cannot be written logs deposit ok, derive ok, pool ok, then index error with the shared key, and rethrows', async () => {
     const staged = stage();
     mkdirSync(join(staged.storeDir, 'hook-index.json'), { recursive: true });
     await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow();
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['index', 'error']]);
-    expect(rows[2]?.key).toBe(rows[1]?.key);
-    expect(rows[2]?.error).toMatch(/^\S/);
-    expect(rows[2]?.error).not.toContain('\n');
+    expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['pool', 'ok'], ['index', 'error']]);
+    expect(rows[3]?.key).toBe(rows[1]?.key);
+    expect(rows[3]?.error).toMatch(/^\S/);
+    expect(rows[3]?.error).not.toContain('\n');
   });
 
   it('a derive that fails leaves the index step skipped, not booked as derive', async () => {
@@ -846,9 +849,10 @@ describe('the counters (spec 3.2)', () => {
     expect(outcome.text).toContain('pipeline step log');
     expect(outcome.text).toMatch(/deposit@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
     expect(outcome.text).toMatch(/derive@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
+    expect(outcome.text).toMatch(/pool@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
     expect(outcome.text).toMatch(/index@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
     expect(outcome.text).toMatch(/invariants passed of checked\s+\d+\/\d+/);
-    expect(outcome.document).toMatchObject({ steps: { runs: 4 } });
+    expect(outcome.document).toMatchObject({ steps: { runs: 5 } });
   });
 
   it('measure --repo filters the G1 table only: the step counters stay all-time', async () => {
@@ -909,12 +913,12 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     expect((await readSteps(staged.storeDir))[0]?.ms).toBe(20);
   });
 
-  it('refresh times the derive pass and the index pass on their own starts', async () => {
+  it('refresh times the derive pass, the pool build, and the index pass on their own starts', async () => {
     const staged = stage();
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const trace = newTrace();
-    await clock([5, 15, 20, 45], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace));
-    expect([trace.derive?.ms, trace.index?.ms]).toEqual([10, 25]);
+    await clock([5, 15, 20, 32, 40, 65], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace));
+    expect([trace.derive?.ms, trace.pool?.ms, trace.index?.ms]).toEqual([10, 12, 25]);
   });
 
   it('refresh times a failed derive pass and a failed index pass', async () => {
@@ -928,8 +932,17 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     rmSync(join(staged.storeDir, 'hook-index.json'));
     mkdirSync(join(staged.storeDir, 'hook-index.json'), { recursive: true });
     const second = newTrace();
-    await clock([5, 15, 20, 45], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', second));
+    await clock([5, 15, 20, 32, 40, 65], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', second));
     expect(second.indexFailure?.ms).toBe(25);
+    // A pool build that fails is timed from its own start too.
+    rmSync(join(staged.storeDir, 'hook-index.json'), { recursive: true });
+    rmSync(join(staged.storeDir, 'cells.jsonl'), { force: true });
+    mkdirSync(join(staged.storeDir, 'cells.jsonl'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const third = newTrace();
+    await clock([5, 15, 20, 27, 40, 65], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', third));
+    expect(third.poolFailure?.ms).toBe(7);
+    expect(third.pool).toBeUndefined();
   });
 
   it('refresh still writes the hook index when the pool cannot be derived or written: the index step does not fail with it', async () => {
@@ -944,6 +957,30 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     expect(trace.indexFailure).toBeUndefined();
     expect(trace.index?.out.signature).toBeGreaterThan(0);
     expect(JSON.parse(readFileSync(join(staged.storeDir, 'hook-index.json'), 'utf8'))).toMatchObject({ at: '2026-06-10T00:00:00.000Z' });
+  });
+
+  it('the nightly run records a pool build that failed in the step log, with its error, and goes on to write the index (t1619: the failure was one stderr line, and the nightly keeps no stderr)', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), good);
+    // A directory where the cells file should be: the pool build throws EISDIR.
+    rmSync(join(staged.storeDir, 'cells.jsonl'), { force: true });
+    mkdirSync(join(staged.storeDir, 'cells.jsonl'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    await runHook('nightly', '', staged.runtime, () => NOW);
+    const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly');
+    expect(nightly.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['pool', 'error'], ['index', 'ok']]);
+    const pool = nightly.find((entry) => entry.step === 'pool');
+    expect(pool?.error).toMatch(/EISDIR/);
+    expect(pool?.key).toBe(nightly.find((entry) => entry.step === 'derive')?.key);
+  });
+
+  it('a pool build that finishes has its own ok row, with the cells it read and the reads it wrote', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), good);
+    const pool = (await readSteps(staged.storeDir)).find((entry) => entry.step === 'pool');
+    expect(pool?.status).toBe('ok');
+    expect(pool?.in.cell).toBeGreaterThan(0);
+    expect(pool?.out.read).toBeGreaterThan(0);
   });
 
   it('a lookup hook logs its wall time on the recall row and the hook-calls line', async () => {

@@ -190,13 +190,17 @@ const unbuilt = (error: unknown): void => {
   process.stderr.write(`${POOL_FAILED}${error instanceof Error ? error.message : String(error)}\n`);
 };
 
-/** The pool a deposit's index step reads. It answers without one (spec 2.7): a pool that cannot be read or written costs only the stored read IDs, whose answers keep their stand-ins, and one line on stderr says so. */
-export const currentPool = async (storeDir: string, store: Store, folds?: PoolFolds | Error): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+/**
+ * The pool a deposit's index step reads. It answers without one (spec 2.7): a pool that cannot be read or written costs only the stored read IDs, whose answers keep their stand-ins, and one line on stderr says so.
+ * `failed` hears the failure too, so the step log can record it (the nightly's stderr goes nowhere).
+ */
+export const currentPool = async (storeDir: string, store: Store, folds?: PoolFolds | Error, failed: (error: unknown) => void = () => undefined): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
   try {
     if (folds instanceof Error) throw folds;
     return await refreshPool(storeDir, store, folds);
   } catch (error) {
     unbuilt(error);
+    failed(error);
     return undefined;
   }
 };

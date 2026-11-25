@@ -867,8 +867,11 @@ export interface HookCall {
   error: string | null;
 }
 
-/** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the local labeler step (A5) that no command runs yet; `index` is the hook-index write the nightly and manual runs log. */
-export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall', 'read'] as const;
+/**
+ * The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the local labeler step (A5) that no command runs yet; `index` is the hook-index write the nightly and manual runs log;
+ * `pool` is the read pool's build between them (its cells and reads), which costs the index only its fit reads when it fails and so had no row before t1619.
+ */
+export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall', 'read', 'pool'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */

@@ -254,8 +254,8 @@ export const inputKey = (trigger: Trigger, requested: readonly string[], domains
  * `derive` and `index` (spec 4.1: one row per step at a nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
  * it was asked to deposit), so the failed row and the ok row of one deposit carry the same key and a failure that recovers is not stuck.
  * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it and for the index (spec 4.4). A derive that fails
- * after the deposit wrote its records logs `deposit` ok, `derive` error, and `index` skipped; an index that fails logs `derive` ok and then
- * `index` error; the failure goes on to the caller. The SessionEnd hook runs
+ * after the deposit wrote its records logs `deposit` ok, `derive` error, and `index` skipped; a pool build that fails logs `pool` error and the run
+ * goes on to the index, which is written without the pool's reads; an index that fails logs `derive` ok and then `index` error; the failure goes on to the caller. The SessionEnd hook runs
  * `withDerive` false: derive follows at the nightly run.
  */
 export const runDeposit = async <T>(context: StepContext, withDerive: boolean, key: string, work: (trace: DepositTrace) => Promise<{ value: T; in: StepCounts }>): Promise<T> => {
@@ -284,10 +284,12 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
   }
   const derive = trace.derive;
   const failure = trace.deriveFailure;
+  const pool = trace.pool;
+  const poolFailure = trace.poolFailure;
   const index = trace.index;
   const indexFailure = trace.indexFailure;
-  // The deposit row keeps its own time: the derive and index passes ran inside its work and have rows of their own.
-  const passes = (derive?.ms ?? failure?.ms ?? 0) + (index?.ms ?? indexFailure?.ms ?? 0);
+  // The deposit row keeps its own time: the derive, pool, and index passes ran inside its work and have rows of their own.
+  const passes = (derive?.ms ?? failure?.ms ?? 0) + (pool?.ms ?? poolFailure?.ms ?? 0) + (index?.ms ?? indexFailure?.ms ?? 0);
   await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - passes, { in: counted, out: trace.kinds, key }, null));
   if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   if (failure !== undefined) {
@@ -295,6 +297,9 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
     await tryLog(() => logSkipped(context, 'index'));
     throw failure.error;
   }
+  if (pool !== undefined) await tryLog(() => logStep(context, 'pool', 'ok', pool.ms, { in: pool.in, out: pool.out, key: pool.key }, null));
+  // A pool that failed is recorded and the run goes on: the index was written without the pool's reads, as before.
+  if (poolFailure !== undefined) await logFailure(context, 'pool', poolFailure.ms, poolFailure.key, poolFailure.error);
   if (index !== undefined) await tryLog(() => logStep(context, 'index', 'ok', index.ms, { in: index.in, out: index.out, key: index.key }, null));
   if (indexFailure !== undefined) {
     await logFailure(context, 'index', indexFailure.ms, indexFailure.key, indexFailure.error);

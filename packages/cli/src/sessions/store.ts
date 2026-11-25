@@ -621,6 +621,10 @@ export interface DepositTrace {
   derive?: DeriveTrace;
   /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
   deriveFailure?: { error: unknown; key: string; ms: number };
+  /** The read pool's build after a derive that succeeded (its cells, motifs, and reads), the input of the index's fit reads. */
+  pool?: DeriveTrace;
+  /** A pool build that failed: the caller logs `pool` error and goes on, since the index is written without the pool's reads. */
+  poolFailure?: { error: unknown; key: string; ms: number };
   /** The index pass after a derive that succeeded: its own step (spec 3.1), run at the nightly and manual runs. */
   index?: DeriveTrace;
   /** An index pass that failed after the derive was written: the caller logs `derive` ok and `index` error, then rethrows. */
@@ -806,14 +810,20 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   }
   // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (the first pool run takes 12 to 17 s on a store copy).
   // A module that will not load costs the index the same fit reads, with one line on stderr, as `currentPool` does when the pool cannot be built.
+  const poolStarted = performance.now();
+  const poolFailed = (error: unknown): void => {
+    if (trace !== undefined) trace.poolFailure = { error, key, ms: Math.round(performance.now() - poolStarted) };
+  };
   const current = await import('./pool.js').then(
-    async ({ currentPool }) => currentPool(runtime.storeDir, store, folds),
+    async ({ currentPool }) => currentPool(runtime.storeDir, store, folds, poolFailed),
     (error: unknown) => {
       process.stderr.write(`oars: the read pool module could not be loaded, and the index keeps no fit reads: ${error instanceof Error ? error.message : String(error)}
 `);
+      poolFailed(error);
       return undefined;
     },
   );
+  if (current !== undefined && trace !== undefined) trace.pool = { ms: Math.round(performance.now() - poolStarted), in: { cell: current.pool.cells.length }, out: { read: current.reads.length }, key };
   runtime.refreshStep?.('pool');
   const reads = current?.reads ?? [];
   const indexStarted = performance.now();
