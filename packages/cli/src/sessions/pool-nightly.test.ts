@@ -850,7 +850,7 @@ describe('the nightly build that keeps a session out for size (t1582 fix round)'
 });
 
 describe('the nightly send after a build that throws (t1586)', () => {
-  it('still sends the batches already in the outbox, notes that the build failed, and logs its reason to pool-send.log', async () => {
+  it('still sends the batches already in the outbox while the gates read as the last build left them, notes that the build failed, and logs its reason to pool-send.log', async () => {
     const here = await scene('declined');
     await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
     const outbox = outboxFolder(here.staged.storeDir, POOL);
@@ -890,6 +890,54 @@ describe('the nightly send after a build that throws (t1586)', () => {
     expect(await nightlyPoolSend(here.deps, pool.via)).toMatchObject({ outcome: 'sent', batches: batches.length - 1, buildFailed: true });
     const posted = pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => batchHash(request.body ?? ''));
     expect(posted).not.toContain(gone?.hash);
+  });
+
+  // Consent withdrawn since the last good build is applied only by a build (the GDPR ruling of 11-09): a night whose build throws must not send what that build would have taken out.
+  it.each([
+    ['a folder switched off', async (here: Scene): Promise<void> => {
+      await updatePoolChoices(here.staged.storeDir, (choices) => {
+        choices.folders.proj = 'off';
+      });
+    }],
+    ['a folder taken off the allowlist', async (here: Scene): Promise<void> => {
+      const file = join(here.staged.storeDir, 'state.json');
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), allow: ['elsewhere'] }));
+    }],
+    ['a new exclusion term', async (here: Scene): Promise<void> => {
+      writeFileSync(join(here.staged.root, 'terms.txt'), 'zorblax\nquuxbar\n');
+    }],
+    ['a damaged gates record', async (here: Scene): Promise<void> => {
+      writeFileSync(join(outboxFolder(here.staged.storeDir, POOL), 'gates.json'), '{ not json');
+    }],
+  ])('sends nothing after %s since the last build, when the build that would apply it throws, and says why', async (_change, change) => {
+    const here = await scene('granted');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    expect((await heldAcross(outbox)).batches.length).toBeGreaterThan(0);
+    expect((await heldRaw(outbox)).copies.length).toBeGreaterThan(0);
+    await change(here);
+    build.error = new Error('the build died');
+    const pool = wire(OK_RAW);
+    const night = await nightlyPoolSend(here.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', batches: 0, raw: 0, buildFailed: true, gatesChanged: true });
+    expect(pool.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+    expect(await sentHashes(outbox)).toHaveProperty('size', 0);
+    expect(JSON.parse(readFileSync(join(here.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ buildFailed: true, gatesChanged: true });
+    expect(readFileSync(join(here.staged.storeDir, 'pool-send.log'), 'utf8')).toContain('The outbox was not sent');
+  });
+
+  it('records the gates only at a full build: a build that names one session leaves the digest of the last full build', async () => {
+    const here = await scene('declined');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const gates = join(outboxFolder(here.staged.storeDir, POOL), 'gates.json');
+    const recorded = readFileSync(gates, 'utf8');
+    await updatePoolChoices(here.staged.storeDir, (choices) => {
+      choices.folders.proj = 'off';
+    });
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1', session: 'a-session-this-store-does-not-hold' });
+    expect(readFileSync(gates, 'utf8')).toBe(recorded);
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    expect(readFileSync(gates, 'utf8')).not.toBe(recorded);
   });
 
   it('notes no build failure on a night whose build ran', async () => {

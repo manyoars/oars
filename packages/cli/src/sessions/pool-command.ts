@@ -21,6 +21,7 @@ import { keepCrewNumber } from './crew-mark.js';
 import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
+import { gateDigest, recordGates } from './pool-gates.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendInterrupted, SendLockBusy, watchInterrupt, withSendLock, type BusyDetail, type LockFs, type LockTimes, type Waiting } from './pool-send-lock.js';
 import { markSent, retirePulled, sentHashes, sentLog } from './pool-sent.js';
@@ -1168,6 +1169,8 @@ export const poolDeposit = async (
     await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
   await scanned.save();
+  // Only a full build has applied every gate to every batch it leaves: a Stop's build names one session, and a machine sweeps nothing. A night whose build throws reads this to know whether what is queued still passes them (t1586).
+  if (machine === undefined && options.session === undefined) await recordGates(outbox, gateDigest(saved.allow, saved.pool, termList));
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;

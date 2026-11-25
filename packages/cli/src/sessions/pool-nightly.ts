@@ -9,6 +9,7 @@ import { machineOf } from './machine.js';
 import { ask, currentTerms, DEPOSIT, isBatchRefusal, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
 import { logFailure } from './pool-due.js';
+import { gateDigest, recordedGates } from './pool-gates.js';
 import { heldAcross, lockedBatch, outboxFolder, readRemoved, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { numberIn } from './pool-replica.js';
@@ -33,9 +34,13 @@ export interface NightlyPool {
   removed?: number;
   /** Set when this night's build of the outbox threw: the batches already in the outbox were still sent, and the reason is in `pool-send.log`. */
   buildFailed?: true;
+  /** Set with `buildFailed` when the allowlist, a folder's send choice, or the term file changed since the last build that finished (or none recorded its gates): nothing was sent, since a held batch may be one the person has withdrawn. */
+  gatesChanged?: true;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
   rawHeld?: true;
 }
+
+const GATES_CHANGED = 'The outbox was not sent: its build failed, and the allowlist, a folder\'s send choice, or the exclusion terms changed since the last build that finished, so a queued batch may be one you withdrew. The next build that finishes applies them and the send goes on.';
 
 const record = async (storeDir: string, result: NightlyPool, at: number): Promise<void> => {
   // A note that cannot be written changes nothing about the night.
@@ -77,8 +82,9 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
   // One sender at a time per outbox, the lock `deposit --send` takes: a second run waits, then finds `sent.log` full and sends nothing twice.
   await withSendLock(outbox, async () => {
     // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
-    // A build that fails costs this night its new batches only (t1586): the batches already in the outbox passed the same gates when an earlier night built them, and a dead
-    // build must not hold them back night after night. Its reason goes to `pool-send.log`, the note says the build failed, and the send goes on.
+    // A build that fails costs this night its new batches only (t1586): the batches already in the outbox passed the gates when an earlier build applied them, and a dead
+    // build must not hold them back night after night. Its reason goes to `pool-send.log`, the note says the build failed, and the send goes on, but only while the gates
+    // read as that build left them: a folder off the allowlist or switched off, or a changed term file, is consent withdrawn that only a build can apply, so then nothing is sent.
     let keptForSize = 0;
     try {
       const built = await poolDeposit(deps, { server, covenant: version });
@@ -86,6 +92,12 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
     } catch (error) {
       tally.buildFailed = true;
       await logFailure(storeDir, deps.now(), error);
+      const saved = await readState(storeDir);
+      if (gateDigest(saved.allow, saved.pool, await currentTerms(deps)) !== (await recordedGates(outbox))) {
+        tally.gatesChanged = true;
+        await logFailure(storeDir, deps.now(), new Error(GATES_CHANGED));
+        return;
+      }
     }
     if (keptForSize > 0) tally.keptForSize = keptForSize;
     // The send honors `removed.json` itself, since a build that failed may not have read it: a damaged list ends the night before anything is sent, and a removed session's batch is never posted.
