@@ -51,6 +51,17 @@ const motifOf = (level: MotifLevel, steps: readonly WindowStep[], cls: string | 
   return motif;
 };
 
+/**
+ * Lets go of every motif made so far. The memo grows with every distinct window a store holds (a long tail of commands, skills, and hosts makes many), and
+ * nothing prunes it, so a refresh lets it go once its folds are done: the pool's cells hold the motifs they count, and a later call makes any other one again.
+ */
+export const forgetMotifs = (): void => {
+  memo.clear();
+};
+
+/** How many motifs the memo holds now. */
+export const heldMotifs = (): number => memo.size;
+
 export const shapeId = (steps: readonly WindowStep[]): string => motifOf('shape', steps, null).motifId;
 export const namedId = (steps: readonly WindowStep[]): string => motifOf('named', steps, null).motifId;
 export const classMotif = (cls: string): Motif => motifOf('class', [], cls);

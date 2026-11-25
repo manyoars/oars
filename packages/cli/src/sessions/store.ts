@@ -771,7 +771,18 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
     tools: [],
     newerCaptures: scan.newerCaptures,
   };
-  return { store, folds: finished(pool, runtime, runs), derive, reads: readFolding.finish(), counts };
+  const folds = finished(pool, runtime, runs);
+  // The cells hold the motifs they count; the memo's other windows and keys are let go before the pool derives its reads (t1619). Loaded here, as the folds are.
+  (await import('./motif.js')).forgetMotifs();
+  return { store, folds, derive, reads: readFolding.finish(), counts };
+};
+
+/** Writes `derived.json` from the fold's sums and returns its counts, for the step log. The record is let go when this returns, before the pool step. */
+const writeDerived = async (storeDir: string, derive: DeriveFold, store: Store, at: string, held: LockHold): Promise<StepCounts> => {
+  const derived = derive.finish(store, at);
+  await requireHold(held);
+  await writeAtomic(paths(storeDir).derived, JSON.stringify(derived));
+  return { signature: derived.signatures.length, summary: derived.summaries.length };
 };
 
 /**
@@ -787,19 +798,20 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   let folds: PoolFolds | Error;
   let readFolds: ReadFolds;
   try {
-    const folded = await foldRuns(runtime);
+    let folded: Folded | undefined = await foldRuns(runtime);
     ({ store, folds, reads: readFolds } = folded);
+    const { derive, counts } = folded;
+    // Only what the pool and the index read stays: the derive's sums are let go with the record they make, which `writeDerived` holds in a frame of its own.
+    folded = undefined;
     // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2); the index shares it.
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
     key = digest([EXTRACTOR_VERSION, ...highWater]);
-    const derived = folded.derive.finish(store, at);
-    await requireHold(held);
-    await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
+    const out = await writeDerived(runtime.storeDir, derive, store, at, held);
     if (trace !== undefined) {
       trace.derive = {
         ms: Math.round(performance.now() - started),
-        in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': folded.counts.prompts, tool: folded.counts.tools },
-        out: { signature: derived.signatures.length, summary: derived.summaries.length },
+        in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': counts.prompts, tool: counts.tools },
+        out,
         key,
       };
     }
